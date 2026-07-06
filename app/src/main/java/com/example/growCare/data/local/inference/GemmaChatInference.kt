@@ -2,6 +2,7 @@ package com.example.growCare.data.local.inference
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,25 +33,36 @@ class GemmaChatInference @Inject constructor(
 ) : LocalChatInference {
 
     companion object {
+        private const val TAG = "GemmaChatInference"
         const val MODEL_FILE_NAME = "gemma4_e2b.litertlm"
         const val MODEL_DIR = "models"
 
+        // ── Generation limits ────────────────────────────────────────────────
+        // Small on-device LLMs (E2B = ~2B params) often fail to emit EOS and
+        // fall into repetition loops. These guards prevent the device from
+        // hanging and memory from exploding.
+
+        /** Maximum number of tokens to generate per response. */
+        private const val MAX_TOKENS = 512
+
+        /** Hard character cutoff — stops generation even mid-token. */
+        private const val MAX_RESPONSE_CHARS = 4000
+
+        /** Window size (in chars) used for repetition detection. */
+        private const val REPETITION_WINDOW = 80
+
+        /** If the same window repeats this many times consecutively, stop. */
+        private const val REPETITION_LIMIT = 3
+
         /**
-         * Agricultural system prompt injected at the start of every conversation.
-         * This keeps the model focused on farming topics and avoids off-topic replies.
+         * Agricultural system prompt — kept concise to leave context window
+         * room for the actual conversation on a small E2B model.
          */
-        private const val SYSTEM_PROMPT = """You are GrowCare AI, a helpful and knowledgeable agricultural assistant designed for smallholder farmers. Your role is to provide clear, practical, and actionable advice on the following topics only:
-
-- Plant disease identification and treatment
-- Crop health and farming best practices
-- Pest and weed control
-- Soil health, fertilization, and irrigation
-- Harvest timing and post-harvest handling
-- Seasonal and weather-related farming decisions
-
-If a user asks a question unrelated to agriculture, politely explain that you are specialized for farming topics and invite them to ask an agricultural question instead.
-
-Keep your answers concise, easy to understand, and practical for a farmer without advanced technical knowledge."""
+        private const val SYSTEM_PROMPT =
+            "You are GrowCare AI, a concise agricultural assistant for farmers. " +
+            "Answer only farming questions (diseases, pests, soil, crops, harvest). " +
+            "If asked about non-farming topics, politely decline. " +
+            "Keep answers short and practical."
     }
 
     // LiteRT-LM Engine — initialized lazily on first use
@@ -85,26 +97,86 @@ Keep your answers concise, easy to understand, and practical for a farmer withou
         engine!!
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Repetition detection
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Checks if the tail of [text] contains the same [REPETITION_WINDOW]-char
+     * block repeated [REPETITION_LIMIT] times consecutively.
+     *
+     * Example with window=5 and limit=3:
+     *   "hello hello hello " → the last 15 chars contain "hello" repeated 3× → true
+     */
+    private fun isRepeating(text: String): Boolean {
+        if (text.length < REPETITION_WINDOW * REPETITION_LIMIT) return false
+
+        val tail = text.takeLast(REPETITION_WINDOW * REPETITION_LIMIT)
+        val window = tail.takeLast(REPETITION_WINDOW)
+
+        var count = 0
+        var offset = tail.length - REPETITION_WINDOW
+        while (offset >= 0) {
+            val chunk = tail.substring(offset, offset + REPETITION_WINDOW)
+            if (chunk == window) count++ else break
+            offset -= REPETITION_WINDOW
+        }
+        return count >= REPETITION_LIMIT
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Streaming chat
+    // ──────────────────────────────────────────────────────────────────────────
+
     /**
      * Streams an agricultural AI response token by token.
      *
      * Each emission to the Flow is the full response string accumulated so far,
      * so the UI can update progressively without managing state itself.
      *
-     * A new [Conversation] is created per call, prepended with the agricultural
-     * system prompt to keep the model on-topic.
+     * Guardrails:
+     *  - Stops after [MAX_TOKENS] tokens
+     *  - Stops after [MAX_RESPONSE_CHARS] characters
+     *  - Stops if repetition is detected
      */
     override fun streamChatReply(prompt: String): Flow<String> = flow {
         try {
             val llm = getEngine()
-
-            // Each chat turn gets a fresh conversation context with the system prompt
             val conversation = llm.createConversation()
 
-            // sendMessageAsync() sends the full prompt and streams tokens as a Flow<String>
             val accumulatedResponse = StringBuilder()
-            conversation.sendMessageAsync("$SYSTEM_PROMPT\n\nFarmer question: $prompt").collect { token ->
+            var tokenCount = 0
+
+            conversation.sendMessageAsync(
+                "$SYSTEM_PROMPT\n\nFarmer question: $prompt"
+            ).collect { token ->
+                tokenCount++
+
+                // Guard 1: max token limit
+                if (tokenCount > MAX_TOKENS) {
+                    Log.i(TAG, "Stopped: max tokens ($MAX_TOKENS)")
+                    return@collect
+                }
+
                 accumulatedResponse.append(token)
+
+                // Guard 2: max character limit
+                if (accumulatedResponse.length > MAX_RESPONSE_CHARS) {
+                    Log.i(TAG, "Stopped: max chars ($MAX_RESPONSE_CHARS)")
+                    return@collect
+                }
+
+                // Guard 3: repetition detection (check every 10 tokens to save CPU)
+                if (tokenCount % 10 == 0 && isRepeating(accumulatedResponse.toString())) {
+                    // Trim the repeated tail before emitting
+                    val clean = accumulatedResponse.substring(
+                        0, accumulatedResponse.length - REPETITION_WINDOW * (REPETITION_LIMIT - 1)
+                    )
+                    Log.i(TAG, "Stopped: repetition detected at token $tokenCount")
+                    emit(clean)
+                    return@collect
+                }
+
                 emit(accumulatedResponse.toString())
             }
 
@@ -136,15 +208,31 @@ Keep your answers concise, easy to understand, and practical for a farmer withou
                     append(SYSTEM_PROMPT)
                     append("\n\n")
                     append("The farmer has shared an image of their crop and asks: $prompt\n")
-                    append("(Image analysis is being processed on-device via the disease detection model. ")
-                    append("Please provide general advice based on the text question.)")
+                    append("Please provide general advice based on the text question.")
                 }
 
                 val result = StringBuilder()
+                var tokenCount = 0
+
                 conversation.sendMessageAsync(fullPrompt).collect { token ->
+                    tokenCount++
+                    if (tokenCount > MAX_TOKENS) return@collect
+
                     result.append(token)
+                    if (result.length > MAX_RESPONSE_CHARS) return@collect
+
+                    if (tokenCount % 10 == 0 && isRepeating(result.toString())) {
+                        return@collect
+                    }
                 }
-                result.toString()
+
+                // Trim any trailing repetition
+                val response = result.toString()
+                if (isRepeating(response)) {
+                    response.substring(0, response.length - REPETITION_WINDOW * (REPETITION_LIMIT - 1))
+                } else {
+                    response
+                }
 
             } catch (e: IllegalStateException) {
                 "⚠️ ${e.message}"

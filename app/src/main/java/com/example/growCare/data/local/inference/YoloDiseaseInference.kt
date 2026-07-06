@@ -55,6 +55,11 @@ class YoloDiseaseInference @Inject constructor(
         private const val CONFIDENCE_THRESHOLD = 0.25f
         private const val IOU_THRESHOLD = 0.45f
 
+        // If more than this fraction of anchors pass the confidence threshold,
+        // the model is likely outputting noise (untrained / 1-epoch checkpoint).
+        // A well-trained YOLO model typically has <5% of anchors above threshold.
+        private const val GARBAGE_ANCHOR_RATIO = 0.15f  // 15% of 8400 = 1260
+
         /**
          * Exact class names from curated_data.yaml — index MUST match training order.
          * Class 0 = Healthy (merged from all crop-specific healthy classes during curation).
@@ -416,6 +421,19 @@ class YoloDiseaseInference @Inject constructor(
         }
 
         if (candidates.isEmpty()) return null
+
+        // ── Sanity check: detect untrained / garbage model output ─────────
+        // A well-trained YOLO model produces a handful of confident detections.
+        // An untrained model (e.g. 1-epoch checkpoint) floods ALL anchors with
+        // high scores for every class. If too many anchors pass threshold,
+        // the output is noise and should be rejected.
+        val garbageLimit = (8400 * GARBAGE_ANCHOR_RATIO).toInt()
+        if (candidates.size > garbageLimit) {
+            Log.w(TAG, "Garbage output detected: ${candidates.size}/8400 anchors above threshold " +
+                "(limit: $garbageLimit). Model likely needs retraining.")
+            return null
+        }
+
         return nms(candidates).maxByOrNull { it.confidence }
     }
 
@@ -450,12 +468,13 @@ class YoloDiseaseInference @Inject constructor(
     }
 
     private fun noDetectionResult() = LocalDiseaseResult(
-        diseaseName = "No Disease Detected",
+        diseaseName = "Unable to Analyze",
         confidence = 0,
-        symptoms = listOf("No significant disease markers were found in this image."),
-        treatment = listOf("Continue regular crop monitoring."),
-        prevention = listOf("Maintain good field hygiene and balanced nutrition."),
-        additionalNotes = "Try retaking the photo in good lighting, close to the affected leaf."
+        symptoms = listOf("The disease detection model could not produce a reliable result."),
+        treatment = listOf("The model may need additional training for accurate detection."),
+        prevention = listOf("Try retaking the photo in good lighting, close to the affected leaf."),
+        additionalNotes = "The YOLO11n model requires full training to produce accurate results. " +
+            "Please retrain the model with the complete PlantVillage dataset."
     )
 
     // ──────────────────────────────────────────────────────────────────────────
