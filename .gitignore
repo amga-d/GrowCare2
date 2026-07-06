@@ -1,0 +1,25 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+Docs
+/app/google-services.json
+# Large files and ML artifacts
+*.pt
+*.onnx
+*.npy
+ML/best_saved_model/
+build_error.txt
+.vscode/
+.kotlin/
