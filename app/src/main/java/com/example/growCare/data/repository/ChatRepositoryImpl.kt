@@ -43,15 +43,15 @@ class ChatRepositoryImpl @Inject constructor(
             
             // Step 2: Stream local on-device response
             val aiMessageId = UUID.randomUUID().toString()
-            val responseBuilder = StringBuilder()
+            var finalResponse = ""
             
-            localChatInference.streamChatReply(message).collect { chunk ->
-                responseBuilder.append(chunk)
+            localChatInference.streamChatReply(message).collect { fullResponseSoFar ->
+                finalResponse = fullResponseSoFar
                 
                 // Emit streaming message
                 emit(ChatMessage(
                     id = aiMessageId,
-                    content = responseBuilder.toString(),
+                    content = finalResponse,
                     isUser = false,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true
@@ -61,7 +61,7 @@ class ChatRepositoryImpl @Inject constructor(
             // Step 3: Emit final AI message and save
             val finalAiMessage = ChatMessage(
                 id = aiMessageId,
-                content = responseBuilder.toString(),
+                content = finalResponse,
                 isUser = false,
                 timestamp = System.currentTimeMillis(),
                 isStreaming = false
