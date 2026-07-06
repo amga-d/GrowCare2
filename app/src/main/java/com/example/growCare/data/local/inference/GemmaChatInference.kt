@@ -101,15 +101,9 @@ Keep your answers concise, easy to understand, and practical for a farmer withou
             // Each chat turn gets a fresh conversation context with the system prompt
             val conversation = llm.createConversation()
 
-            // Inject the system prompt as the first user/model exchange
-            // to establish the agricultural context before the real user message
-            conversation.addQueryChunk(SYSTEM_PROMPT)
-            conversation.addQueryChunk("\n\nFarmer question: $prompt")
-
+            // sendMessageAsync() sends the full prompt and streams tokens as a Flow<String>
             val accumulatedResponse = StringBuilder()
-
-            // sendMessageAsync() performs real token-level streaming from the on-device model
-            conversation.generateResponseAsync().collect { token ->
+            conversation.sendMessageAsync("$SYSTEM_PROMPT\n\nFarmer question: $prompt").collect { token ->
                 accumulatedResponse.append(token)
                 emit(accumulatedResponse.toString())
             }
@@ -146,10 +140,8 @@ Keep your answers concise, easy to understand, and practical for a farmer withou
                     append("Please provide general advice based on the text question.)")
                 }
 
-                conversation.addQueryChunk(fullPrompt)
-
                 val result = StringBuilder()
-                conversation.generateResponseAsync().collect { token ->
+                conversation.sendMessageAsync(fullPrompt).collect { token ->
                     result.append(token)
                 }
                 result.toString()

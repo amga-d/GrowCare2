@@ -10,9 +10,9 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import com.google.ai.edge.litert.Interpreter
-import com.google.ai.edge.litert.gpu.GpuDelegate
-import com.google.ai.edge.litert.support.common.FileUtil
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.GpuDelegate
+import org.tensorflow.lite.support.common.FileUtil
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

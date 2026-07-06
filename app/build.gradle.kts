@@ -5,7 +5,6 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
-    alias(libs.plugins.google.services)
     alias(libs.plugins.ksp)
 }
 
@@ -53,6 +52,11 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // litertlm-android:0.13.1 was compiled with Kotlin 2.3.0 metadata.
+        // This flag suppresses the version mismatch error without changing
+        // how our own code is compiled — it only affects reading the library's
+        // metadata at compile time.
+        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
     buildFeatures {
         compose = true
