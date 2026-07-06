@@ -49,7 +49,7 @@ class GemmaChatInference @Inject constructor(
         private const val MAX_RESPONSE_CHARS = 4000
 
         /** Window size (in chars) used for repetition detection. */
-        private const val REPETITION_WINDOW = 80
+        private const val REPETITION_WINDOW = 40
 
         /** If the same window repeats this many times consecutively, stop. */
         private const val REPETITION_LIMIT = 3
@@ -64,6 +64,17 @@ class GemmaChatInference @Inject constructor(
             "If asked about non-farming topics, politely decline. " +
             "Keep answers short and practical."
     }
+
+    /**
+     * Custom exception thrown to forcefully break out of Flow.collect().
+     *
+     * In Kotlin, `return@collect` only skips the current lambda invocation —
+     * it does NOT stop the upstream flow from emitting more tokens.
+     * The only way to abort a flow collection is to throw from inside collect().
+     * We use a custom exception (not CancellationException) so it doesn't
+     * cancel the outer coroutine scope.
+     */
+    private class StopGenerationException(val reason: String) : Exception(reason)
 
     // LiteRT-LM Engine — initialized lazily on first use
     private var engine: Engine? = null
@@ -104,14 +115,12 @@ class GemmaChatInference @Inject constructor(
     /**
      * Checks if the tail of [text] contains the same [REPETITION_WINDOW]-char
      * block repeated [REPETITION_LIMIT] times consecutively.
-     *
-     * Example with window=5 and limit=3:
-     *   "hello hello hello " → the last 15 chars contain "hello" repeated 3× → true
      */
     private fun isRepeating(text: String): Boolean {
-        if (text.length < REPETITION_WINDOW * REPETITION_LIMIT) return false
+        val minLen = REPETITION_WINDOW * REPETITION_LIMIT
+        if (text.length < minLen) return false
 
-        val tail = text.takeLast(REPETITION_WINDOW * REPETITION_LIMIT)
+        val tail = text.takeLast(minLen)
         val window = tail.takeLast(REPETITION_WINDOW)
 
         var count = 0
@@ -122,6 +131,26 @@ class GemmaChatInference @Inject constructor(
             offset -= REPETITION_WINDOW
         }
         return count >= REPETITION_LIMIT
+    }
+
+    /**
+     * Trims trailing repeated blocks from the response.
+     */
+    private fun trimRepetition(text: String): String {
+        if (!isRepeating(text)) return text
+        // Find where repetition starts by walking backwards
+        val window = text.takeLast(REPETITION_WINDOW)
+        var cutPoint = text.length - REPETITION_WINDOW
+        while (cutPoint >= REPETITION_WINDOW) {
+            val prev = text.substring(cutPoint - REPETITION_WINDOW, cutPoint)
+            if (prev == window) {
+                cutPoint -= REPETITION_WINDOW
+            } else {
+                break
+            }
+        }
+        // Keep one instance of the repeated block
+        return text.substring(0, cutPoint + REPETITION_WINDOW).trimEnd()
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -138,50 +167,54 @@ class GemmaChatInference @Inject constructor(
      *  - Stops after [MAX_TOKENS] tokens
      *  - Stops after [MAX_RESPONSE_CHARS] characters
      *  - Stops if repetition is detected
+     *
+     * Uses [StopGenerationException] to forcefully break out of Flow.collect(),
+     * since `return@collect` does NOT stop the upstream flow.
      */
     override fun streamChatReply(prompt: String): Flow<String> = flow {
         try {
             val llm = getEngine()
             val conversation = llm.createConversation()
 
-            val accumulatedResponse = StringBuilder()
+            val accumulated = StringBuilder()
             var tokenCount = 0
 
-            conversation.sendMessageAsync(
-                "$SYSTEM_PROMPT\n\nFarmer question: $prompt"
-            ).collect { token ->
-                tokenCount++
+            try {
+                conversation.sendMessageAsync(
+                    "$SYSTEM_PROMPT\n\nFarmer question: $prompt"
+                ).collect { token ->
+                    tokenCount++
+                    accumulated.append(token)
 
-                // Guard 1: max token limit
-                if (tokenCount > MAX_TOKENS) {
-                    Log.i(TAG, "Stopped: max tokens ($MAX_TOKENS)")
-                    return@collect
+                    // Guard 1: max token limit
+                    if (tokenCount > MAX_TOKENS) {
+                        throw StopGenerationException("max tokens ($MAX_TOKENS)")
+                    }
+
+                    // Guard 2: max character limit
+                    if (accumulated.length > MAX_RESPONSE_CHARS) {
+                        throw StopGenerationException("max chars ($MAX_RESPONSE_CHARS)")
+                    }
+
+                    // Guard 3: repetition detection (check every 5 tokens)
+                    if (tokenCount % 5 == 0 && isRepeating(accumulated.toString())) {
+                        throw StopGenerationException("repetition at token $tokenCount")
+                    }
+
+                    emit(accumulated.toString())
                 }
+            } catch (e: StopGenerationException) {
+                // Expected — generation was intentionally stopped by a guard
+                Log.i(TAG, "Generation stopped: ${e.reason}")
+            }
 
-                accumulatedResponse.append(token)
-
-                // Guard 2: max character limit
-                if (accumulatedResponse.length > MAX_RESPONSE_CHARS) {
-                    Log.i(TAG, "Stopped: max chars ($MAX_RESPONSE_CHARS)")
-                    return@collect
-                }
-
-                // Guard 3: repetition detection (check every 10 tokens to save CPU)
-                if (tokenCount % 10 == 0 && isRepeating(accumulatedResponse.toString())) {
-                    // Trim the repeated tail before emitting
-                    val clean = accumulatedResponse.substring(
-                        0, accumulatedResponse.length - REPETITION_WINDOW * (REPETITION_LIMIT - 1)
-                    )
-                    Log.i(TAG, "Stopped: repetition detected at token $tokenCount")
-                    emit(clean)
-                    return@collect
-                }
-
-                emit(accumulatedResponse.toString())
+            // Final emit with cleaned-up text (trim any trailing repetition)
+            val finalText = trimRepetition(accumulated.toString()).trimEnd()
+            if (finalText.isNotEmpty()) {
+                emit(finalText)
             }
 
         } catch (e: IllegalStateException) {
-            // Model file missing — surface a clear user-facing message
             emit("⚠️ ${e.message}")
         } catch (e: Exception) {
             emit("⚠️ Could not generate a response: ${e.message}")
@@ -193,8 +226,7 @@ class GemmaChatInference @Inject constructor(
      *
      * Note: Gemma 4 E2B supports multimodal inputs in its full form, but the
      * LiteRT-LM text-only API does not currently expose image tensor inputs in
-     * the stable Kotlin API. The image URI is logged here for future use when
-     * the multimodal conversation API stabilizes.
+     * the stable Kotlin API.
      *
      * For now, the model responds based on the text prompt alone.
      */
@@ -214,25 +246,26 @@ class GemmaChatInference @Inject constructor(
                 val result = StringBuilder()
                 var tokenCount = 0
 
-                conversation.sendMessageAsync(fullPrompt).collect { token ->
-                    tokenCount++
-                    if (tokenCount > MAX_TOKENS) return@collect
+                try {
+                    conversation.sendMessageAsync(fullPrompt).collect { token ->
+                        tokenCount++
+                        result.append(token)
 
-                    result.append(token)
-                    if (result.length > MAX_RESPONSE_CHARS) return@collect
-
-                    if (tokenCount % 10 == 0 && isRepeating(result.toString())) {
-                        return@collect
+                        if (tokenCount > MAX_TOKENS) {
+                            throw StopGenerationException("max tokens")
+                        }
+                        if (result.length > MAX_RESPONSE_CHARS) {
+                            throw StopGenerationException("max chars")
+                        }
+                        if (tokenCount % 5 == 0 && isRepeating(result.toString())) {
+                            throw StopGenerationException("repetition")
+                        }
                     }
+                } catch (e: StopGenerationException) {
+                    Log.i(TAG, "Generation stopped (image): ${e.reason}")
                 }
 
-                // Trim any trailing repetition
-                val response = result.toString()
-                if (isRepeating(response)) {
-                    response.substring(0, response.length - REPETITION_WINDOW * (REPETITION_LIMIT - 1))
-                } else {
-                    response
-                }
+                trimRepetition(result.toString()).trimEnd()
 
             } catch (e: IllegalStateException) {
                 "⚠️ ${e.message}"
