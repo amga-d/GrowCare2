@@ -9,4 +9,5 @@ import kotlinx.coroutines.flow.Flow
 interface LocalChatInference {
     fun streamChatReply(prompt: String): Flow<String>
     suspend fun replyWithImage(prompt: String, imageUri: Uri): String
+    suspend fun generateDiseaseAdvice(diseaseName: String): String
 }

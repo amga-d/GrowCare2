@@ -273,4 +273,56 @@ class GemmaChatInference @Inject constructor(
                 "⚠️ Could not analyze the image context: ${e.message}"
             }
         }
+
+    override suspend fun generateDiseaseAdvice(diseaseName: String): String =
+        withContext(Dispatchers.IO) {
+            try {
+                val llm = getEngine()
+                val conversation = llm.createConversation()
+
+                val fullPrompt = buildString {
+                    append("You are an expert agricultural AI. ")
+                    append("The farmer's crop has been diagnosed with: $diseaseName. ")
+                    append("Provide exactly 2 Symptoms, 2 Treatments, and 2 Preventions. ")
+                    append("Format your response strictly with the following exact headers:\n")
+                    append("Symptoms:\n")
+                    append("- [symptom 1]\n")
+                    append("- [symptom 2]\n\n")
+                    append("Treatment:\n")
+                    append("- [treatment 1]\n")
+                    append("- [treatment 2]\n\n")
+                    append("Prevention:\n")
+                    append("- [prevention 1]\n")
+                    append("- [prevention 2]\n")
+                }
+
+                val result = StringBuilder()
+                var tokenCount = 0
+
+                try {
+                    conversation.sendMessageAsync(fullPrompt).collect { token ->
+                        tokenCount++
+                        result.append(token)
+
+                        if (tokenCount > MAX_TOKENS) {
+                            throw StopGenerationException("max tokens")
+                        }
+                        if (result.length > MAX_RESPONSE_CHARS) {
+                            throw StopGenerationException("max chars")
+                        }
+                        if (tokenCount % 5 == 0 && isRepeating(result.toString())) {
+                            throw StopGenerationException("repetition")
+                        }
+                    }
+                } catch (e: StopGenerationException) {
+                    Log.i(TAG, "Generation stopped (advice): ${e.reason}")
+                }
+
+                trimRepetition(result.toString()).trimEnd()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to generate advice", e)
+                ""
+            }
+        }
 }

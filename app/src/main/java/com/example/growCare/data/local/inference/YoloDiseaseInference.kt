@@ -92,152 +92,6 @@ class YoloDiseaseInference @Inject constructor(
             listOf("Maintain current crop management practices."),
             listOf("Continue regular scouting to catch early signs of stress.")
         )
-
-        /** Static agronomic knowledge keyed by class index. */
-        private val DISEASE_INFO = mapOf(
-            0 to Triple( // Apple___Apple_scab
-                listOf("Olive-green to brown velvety lesions on leaves and fruit.", "Distorted shoots and leaves."),
-                listOf("Apply fungicides (captan, myclobutanil).", "Remove and destroy infected plant material."),
-                listOf("Plant resistant apple varieties.", "Ensure good air circulation.")
-            ),
-            1 to Triple( // Apple___Black_rot
-                listOf("Small, purple-bordered leaf spots with tan centres.", "Shrivelled, mummified fruit."),
-                listOf("Apply copper-based fungicides.", "Prune and remove infected wood."),
-                listOf("Avoid wounding trees.", "Maintain tree vigor through balanced fertilization.")
-            ),
-            2 to Triple( // Apple___Cedar_apple_rust
-                listOf("Orange rust-colored spots on upper leaf surface.", "Tube-like spore structures underneath."),
-                listOf("Apply myclobutanil or triadimefon fungicides.", "Remove heavily infected branches."),
-                listOf("Do not plant apples near eastern red cedars.", "Use resistant varieties where available.")
-            ),
-            3 to HEALTHY_INFO, // Apple___healthy
-            4 to HEALTHY_INFO, // Blueberry___healthy
-            5 to Triple( // Cherry_(including_sour)___Powdery_mildew
-                listOf("White powdery fungal growth on young leaves.", "Leaf distortion and premature drop."),
-                listOf("Apply sulfur or potassium bicarbonate sprays.", "Remove infected shoots."),
-                listOf("Improve canopy airflow with pruning.", "Avoid excess nitrogen fertilization.")
-            ),
-            6 to HEALTHY_INFO, // Cherry_(including_sour)___healthy
-            7 to Triple( // Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot
-                listOf("Small grey or tan rectangular leaf spots.", "Lesions bordered by leaf veins."),
-                listOf("Apply strobilurin or triazole fungicides.", "Rotate with non-host crops."),
-                listOf("Plant resistant hybrids.", "Avoid planting in fields with previous history.")
-            ),
-            8 to Triple( // Corn_(maize)___Common_rust_
-                listOf("Pustules of orange-red spores on undersides of leaves.", "Yellow-orange discoloration."),
-                listOf("Apply triazole or strobilurin fungicides.", "Scout fields regularly after tasseling."),
-                listOf("Plant resistant hybrids.", "Monitor weather forecasts for high-risk conditions.")
-            ),
-            9 to Triple( // Corn_(maize)___Northern_Leaf_Blight
-                listOf("Large, elliptical lesions with wavy margins.", "Greyish-green to tan lesions on leaves."),
-                listOf("Apply azoxystrobin or propiconazole.", "Plant early to avoid peak infection periods."),
-                listOf("Select resistant hybrids.", "Avoid susceptible hybrids in high-risk areas.")
-            ),
-            10 to HEALTHY_INFO, // Corn_(maize)___healthy
-            11 to Triple( // Grape___Black_rot
-                listOf("Small, angular reddish-brown lesions on leaves.", "Black shrivelled berries."),
-                listOf("Apply copper or myclobutanil fungicides from bud break.", "Remove mummified berries."),
-                listOf("Prune for good canopy airflow.", "Remove all infected material after harvest.")
-            ),
-            12 to Triple( // Grape___Esca_(Black_Measles)
-                listOf("Reddish-brown streaks on canes.", "Interveinal yellowing; leaves wilt and dry."),
-                listOf("No curative treatment; remove and destroy infected vines.", "Apply preventive copper sprays."),
-                listOf("Use certified healthy planting material.", "Avoid planting in soils with Phaeomoniella.")
-            ),
-            13 to Triple( // Grape___Leaf_blight_(Isariopsis_Leaf_Spot)
-                listOf("Brown spots with yellow margins on leaves.", "Lesions coalesce and leaves fall."),
-                listOf("Apply copper-based fungicides.", "Remove infected leaves promptly."),
-                listOf("Prune to improve air circulation.", "Avoid overhead irrigation.")
-            ),
-            14 to HEALTHY_INFO, // Grape___healthy
-            15 to Triple( // Orange___Haunglongbing_(Citrus_greening)
-                listOf("Yellowing of veins and adjacent leaf tissue.", "Fruit is small, lopsided, and poorly colored."),
-                listOf("No cure; remove infected trees.", "Control the psyllid vector with insecticides."),
-                listOf("Use certified disease-free nursery stock.", "Control psyllid populations.")
-            ),
-            16 to Triple( // Peach___Bacterial_spot
-                listOf("Water-soaked spots that turn brown with yellow margins on fruit and leaves.", "Fruit cracks."),
-                listOf("Apply oxytetracycline or copper-based bactericides.", "Remove infected twigs."),
-                listOf("Plant resistant peach varieties.", "Avoid excessive nitrogen fertilization.")
-            ),
-            17 to HEALTHY_INFO, // Peach___healthy
-            18 to Triple( // Pepper,_bell___Bacterial_spot
-                listOf("Small, yellowish-green to brown spots on leaves.", "Lesions have a slightly raised, scabby appearance."),
-                listOf("Apply copper-based fungicides with mancozeb.", "Remove infected plants immediately."),
-                listOf("Use certified disease-free seeds.", "Rotate crops; do not plant nightshades in the same soil.")
-            ),
-            19 to HEALTHY_INFO, // Pepper,_bell___healthy
-            20 to Triple( // Potato___Early_blight
-                listOf("Dark brown to black lesions with concentric rings on leaves.", "Lower leaves affected first."),
-                listOf("Apply chlorothalonil or mancozeb fungicides.", "Ensure plants have adequate nitrogen."),
-                listOf("Rotate crops out of nightshade family.", "Remove potato vines after harvest.")
-            ),
-            21 to Triple( // Potato___Late_blight
-                listOf("Water-soaked, dark green to black lesions on leaves.", "White fungal growth on leaf undersides in high humidity."),
-                listOf("Apply mefenoxam or chlorothalonil immediately.", "Destroy all infected plants and tubers."),
-                listOf("Use certified seed potatoes.", "Avoid overhead irrigation and ensure good drainage.")
-            ),
-            22 to HEALTHY_INFO, // Potato___healthy
-            23 to HEALTHY_INFO, // Raspberry___healthy
-            24 to HEALTHY_INFO, // Soybean___healthy
-            25 to Triple( // Squash___Powdery_mildew
-                listOf("White, powdery fungal spots on leaves and stems.", "Leaves may turn yellow and die prematurely."),
-                listOf("Apply sulfur or potassium bicarbonate sprays.", "Remove infected plant debris."),
-                listOf("Plant resistant varieties.", "Provide adequate spacing for air circulation.")
-            ),
-            26 to Triple( // Strawberry___Leaf_scorch
-                listOf("Irregular purplish-brown spots on leaves.", "Lesions lack white centers (unlike leaf spot)."),
-                listOf("Apply captan or myclobutanil fungicides.", "Remove infected leaves."),
-                listOf("Maintain good weed control.", "Avoid dense plantings to improve air flow.")
-            ),
-            27 to HEALTHY_INFO, // Strawberry___healthy
-            28 to Triple( // Tomato___Bacterial_spot
-                listOf("Small, dark, water-soaked spots on leaves.", "Spots become angular and turn black."),
-                listOf("Apply copper fungicides mixed with mancozeb.", "Avoid working in wet fields."),
-                listOf("Use disease-free seed.", "Practice strict crop rotation.")
-            ),
-            29 to Triple( // Tomato___Early_blight
-                listOf("Dark lesions with concentric rings on lower leaves.", "Yellowing around the lesions."),
-                listOf("Apply chlorothalonil or copper-based fungicides.", "Remove affected lower leaves."),
-                listOf("Stake or cage plants to keep foliage off the ground.", "Mulch to prevent soil splash.")
-            ),
-            30 to Triple( // Tomato___Late_blight
-                listOf("Large, irregular, water-soaked lesions on leaves and stems.", "Rapid defoliation and fruit rot."),
-                listOf("Apply chlorothalonil or copper fungicides immediately.", "Remove and destroy severely infected plants."),
-                listOf("Ensure good air circulation.", "Avoid overhead watering.")
-            ),
-            31 to Triple( // Tomato___Leaf_Mold
-                listOf("Pale green or yellow spots on upper leaf surface.", "Olive-green to brown velvety mold on underside."),
-                listOf("Apply chlorothalonil or mancozeb.", "Improve greenhouse ventilation."),
-                listOf("Use resistant varieties.", "Maintain humidity below 85%.")
-            ),
-            32 to Triple( // Tomato___Septoria_leaf_spot
-                listOf("Small, circular spots with dark borders and grey centers.", "Tiny black specks (pycnidia) in the center of spots."),
-                listOf("Apply chlorothalonil or copper fungicides.", "Remove infected lower leaves."),
-                listOf("Rotate crops.", "Water at the base of the plant to keep leaves dry.")
-            ),
-            33 to Triple( // Tomato___Spider_mites Two-spotted_spider_mite
-                listOf("Tiny yellow or white speckles on leaves.", "Fine webbing visible on undersides of leaves."),
-                listOf("Apply horticultural oils or insecticidal soaps.", "Release predatory mites (e.g., Phytoseiulus persimilis)."),
-                listOf("Maintain adequate irrigation; mites thrive on stressed plants.", "Control broadleaf weeds.")
-            ),
-            34 to Triple( // Tomato___Target_Spot
-                listOf("Dark brown lesions with concentric rings, often with a yellow halo.", "Lesions may coalesce and cause leaf blight."),
-                listOf("Apply chlorothalonil or azoxystrobin fungicides.", "Remove infected leaves and debris."),
-                listOf("Improve air circulation.", "Avoid overhead irrigation.")
-            ),
-            35 to Triple( // Tomato___Tomato_Yellow_Leaf_Curl_Virus
-                listOf("Upward curling and yellowing of leaf margins.", "Stunted plant growth and reduced fruit set."),
-                listOf("No cure; remove and destroy infected plants immediately.", "Control whitefly populations with insecticides or oils."),
-                listOf("Plant resistant varieties.", "Use reflective mulches to repel whiteflies.")
-            ),
-            36 to Triple( // Tomato___Tomato_mosaic_virus
-                listOf("Mottled light and dark green patterns on leaves.", "Stunted growth and distorted fruit."),
-                listOf("No cure; remove and destroy infected plants.", "Wash hands and tools thoroughly with soap after handling."),
-                listOf("Use certified disease-free seeds.", "Avoid using tobacco products near plants (can transmit TMV).")
-            ),
-            37 to HEALTHY_INFO // Tomato___healthy
-        )
     }
 
     private var interpreter: Interpreter? = null
@@ -308,20 +162,23 @@ class YoloDiseaseInference @Inject constructor(
                     bestIndex = i
                 }
             }
+            
+            // Debug: print top 3 scores to see what the model is doing
+            val top3 = output[0].withIndex().sortedByDescending { it.value }.take(3)
+            Log.d(TAG, "Top 3 predictions: " + top3.joinToString { "${CLASS_NAMES.getOrNull(it.index)}: ${it.value}" })
 
             if (bestScore < CONFIDENCE_THRESHOLD) {
                 return@withContext noDetectionResult()
             }
 
-            val info = DISEASE_INFO[bestIndex]
             val className = CLASS_NAMES.getOrElse(bestIndex) { "Unknown" }
 
             LocalDiseaseResult(
                 diseaseName = className,
                 confidence = (bestScore * 100).toInt(),
-                symptoms = info?.first ?: listOf("Inspect leaves, stems, and roots for visible damage."),
-                treatment = info?.second ?: listOf("Consult a local agricultural extension officer."),
-                prevention = info?.third ?: listOf("Maintain good crop hygiene and monitor regularly."),
+                symptoms = emptyList(),
+                treatment = emptyList(),
+                prevention = emptyList(),
                 additionalNotes = "Classified on-device by YOLO11n-cls · LiteRT FP16 · " +
                     if (gpuDelegate != null) "GPU accelerated" else "CPU fallback"
             )
