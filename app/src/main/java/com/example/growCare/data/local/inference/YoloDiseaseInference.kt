@@ -3,6 +3,8 @@ package com.example.growCare.data.local.inference
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -254,8 +256,8 @@ class YoloDiseaseInference @Inject constructor(
         additionalNotes = "Prediction confidence was below the minimum threshold ($CONFIDENCE_THRESHOLD)."
     )
 
-    private fun loadBitmap(uri: Uri): Bitmap =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    private fun loadBitmap(uri: Uri): Bitmap {
+        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ImageDecoder.decodeBitmap(
                 ImageDecoder.createSource(context.contentResolver, uri)
             ) { decoder, _, _ ->
@@ -266,4 +268,40 @@ class YoloDiseaseInference @Inject constructor(
             @Suppress("DEPRECATION")
             MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
         }
+        return rotateBitmapIfRequired(bitmap, uri)
+    }
+
+    /**
+     * Reads the EXIF orientation tag from the image file and rotates the Bitmap
+     * so that camera photos are correctly oriented before being fed to YOLO.
+     * Models struggle heavily if fed a 90-degree sideways image.
+     */
+    private fun rotateBitmapIfRequired(bitmap: Bitmap, uri: Uri): Bitmap {
+        try {
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                val exif = ExifInterface(inputStream)
+                val orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+
+                val matrix = Matrix()
+                when (orientation) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                    ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                    ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                    else -> return bitmap
+                }
+
+                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                if (rotated != bitmap) {
+                    bitmap.recycle()
+                }
+                return rotated
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read EXIF orientation, falling back to original bitmap", e)
+        }
+        return bitmap
+    }
 }
