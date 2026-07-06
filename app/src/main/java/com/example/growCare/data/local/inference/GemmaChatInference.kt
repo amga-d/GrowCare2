@@ -43,10 +43,10 @@ class GemmaChatInference @Inject constructor(
         // hanging and memory from exploding.
 
         /** Maximum number of tokens to generate per response. */
-        private const val MAX_TOKENS = 512
+        private const val MAX_TOKENS = 1024
 
         /** Hard character cutoff — stops generation even mid-token. */
-        private const val MAX_RESPONSE_CHARS = 4000
+        private const val MAX_RESPONSE_CHARS = 8000
 
         /** Window size (in chars) used for repetition detection. */
         private const val REPETITION_WINDOW = 40
@@ -59,10 +59,10 @@ class GemmaChatInference @Inject constructor(
          * room for the actual conversation on a small E2B model.
          */
         private const val SYSTEM_PROMPT =
-            "You are GrowCare AI, a concise agricultural assistant for farmers. " +
+            "You are GrowCare AI, a highly intelligent and detailed agricultural assistant for farmers. " +
             "Answer only farming questions (diseases, pests, soil, crops, harvest). " +
             "If asked about non-farming topics, politely decline. " +
-            "Keep answers short and practical."
+            "Provide comprehensive, step-by-step, and educational answers."
     }
 
     /**
@@ -184,8 +184,8 @@ class GemmaChatInference @Inject constructor(
                 append("\n\n")
                 if (history.isNotEmpty()) {
                     append("Previous Conversation:\n")
-                    // Only take the last 5 messages to avoid blowing up the context window
-                    history.takeLast(5).forEach { msg ->
+                    // Increased context window from 5 to 20 messages (10 full turns)
+                    history.takeLast(20).forEach { msg ->
                         val role = if (msg.isUser) "Farmer" else "GrowCare"
                         append("$role: ${msg.content}\n")
                     }
