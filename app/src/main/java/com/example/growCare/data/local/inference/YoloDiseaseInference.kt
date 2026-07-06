@@ -2,10 +2,7 @@ package com.example.growCare.data.local.inference
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ImageDecoder
-import android.graphics.Paint
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -20,27 +17,19 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.max
 import kotlin.math.min
 
 /**
- * On-device plant disease detector powered by YOLO11n via LiteRT.
+ * On-device plant disease detector powered by YOLO11n-cls via LiteRT.
  *
  * Model:   disease_detection.tflite (bundled in assets)
  * Format:  TFLite FP16 — exported with `model.export(format='tflite', half=True)`
- * Task:    Detection (not classification)
- * Classes: 27  (curated PlantVillage — index 0 = Healthy, 1-26 = diseases)
+ * Task:    Classification
+ * Classes: 38  (PlantVillage)
  *
  * I/O:
- *   Input  → [1, 640, 640, 3]  float32, normalized 0-1, letterboxed
- *   Output → [1, 31, 8400]     31 = 4 box coords (xywh) + 27 class scores
- *
- * Post-processing:
- *   1. Transpose output to [8400, 31]
- *   2. Filter anchors below confidence threshold
- *   3. Decode normalized xywh → pixel x1y1x2y2
- *   4. Non-Maximum Suppression (IoU ≥ 0.45)
- *   5. Return top detection mapped to a [LocalDiseaseResult]
+ *   Input  → [1, H, W, 3] float32, normalized 0-1 (H/W read dynamically)
+ *   Output → [1, 38] float32 class probabilities
  */
 @Singleton
 class YoloDiseaseInference @Inject constructor(
@@ -50,39 +39,42 @@ class YoloDiseaseInference @Inject constructor(
     companion object {
         private const val TAG = "YoloDiseaseInference"
         private const val MODEL_ASSET = "disease_detection.tflite"
-        private const val INPUT_SIZE = 640
-        private const val NUM_CLASSES = 27
-        private const val CONFIDENCE_THRESHOLD = 0.25f
-        private const val IOU_THRESHOLD = 0.45f
-
-        // If more than this fraction of anchors pass the confidence threshold,
-        // the model is likely outputting noise (untrained / 1-epoch checkpoint).
-        // A well-trained YOLO model typically has <5% of anchors above threshold.
-        private const val GARBAGE_ANCHOR_RATIO = 0.15f  // 15% of 8400 = 1260
+        private const val NUM_CLASSES = 38
+        private const val CONFIDENCE_THRESHOLD = 0.25f // Reject predictions below this
 
         /**
-         * Exact class names from curated_data.yaml — index MUST match training order.
-         * Class 0 = Healthy (merged from all crop-specific healthy classes during curation).
+         * Exact class names matching the classification model's output.
+         * Must match the classes.txt export order.
          */
         val CLASS_NAMES = listOf(
-            "Healthy",
             "Apple - Apple Scab",
             "Apple - Black Rot",
             "Apple - Cedar Apple Rust",
+            "Apple - Healthy",
+            "Blueberry - Healthy",
             "Cherry - Powdery Mildew",
-            "Corn - Cercospora Leaf Spot / Gray Leaf Spot",
+            "Cherry - Healthy",
+            "Corn - Cercospora Leaf Spot",
             "Corn - Common Rust",
             "Corn - Northern Leaf Blight",
+            "Corn - Healthy",
             "Grape - Black Rot",
             "Grape - Esca (Black Measles)",
-            "Grape - Leaf Blight (Isariopsis)",
-            "Orange - Huanglongbing (Citrus Greening)",
+            "Grape - Leaf Blight",
+            "Grape - Healthy",
+            "Orange - Citrus Greening",
             "Peach - Bacterial Spot",
-            "Pepper - Bacterial Spot",
+            "Peach - Healthy",
+            "Pepper, Bell - Bacterial Spot",
+            "Pepper, Bell - Healthy",
             "Potato - Early Blight",
             "Potato - Late Blight",
+            "Potato - Healthy",
+            "Raspberry - Healthy",
+            "Soybean - Healthy",
             "Squash - Powdery Mildew",
             "Strawberry - Leaf Scorch",
+            "Strawberry - Healthy",
             "Tomato - Bacterial Spot",
             "Tomato - Early Blight",
             "Tomato - Late Blight",
@@ -91,395 +83,318 @@ class YoloDiseaseInference @Inject constructor(
             "Tomato - Spider Mites",
             "Tomato - Target Spot",
             "Tomato - Yellow Leaf Curl Virus",
-            "Tomato - Mosaic Virus"
+            "Tomato - Mosaic Virus",
+            "Tomato - Healthy"
+        )
+
+        private val HEALTHY_INFO = Triple(
+            listOf("No visible disease symptoms detected."),
+            listOf("Maintain current crop management practices."),
+            listOf("Continue regular scouting to catch early signs of stress.")
         )
 
         /** Static agronomic knowledge keyed by class index. */
         private val DISEASE_INFO = mapOf(
-            0 to Triple(
-                listOf("No visible disease symptoms detected."),
-                listOf("Maintain current crop management practices."),
-                listOf("Continue regular scouting to catch early signs of stress.")
-            ),
-            1 to Triple(
+            0 to Triple( // Apple___Apple_scab
                 listOf("Olive-green to brown velvety lesions on leaves and fruit.", "Distorted shoots and leaves."),
                 listOf("Apply fungicides (captan, myclobutanil).", "Remove and destroy infected plant material."),
                 listOf("Plant resistant apple varieties.", "Ensure good air circulation.")
             ),
-            2 to Triple(
+            1 to Triple( // Apple___Black_rot
                 listOf("Small, purple-bordered leaf spots with tan centres.", "Shrivelled, mummified fruit."),
                 listOf("Apply copper-based fungicides.", "Prune and remove infected wood."),
                 listOf("Avoid wounding trees.", "Maintain tree vigor through balanced fertilization.")
             ),
-            3 to Triple(
+            2 to Triple( // Apple___Cedar_apple_rust
                 listOf("Orange rust-colored spots on upper leaf surface.", "Tube-like spore structures underneath."),
                 listOf("Apply myclobutanil or triadimefon fungicides.", "Remove heavily infected branches."),
                 listOf("Do not plant apples near eastern red cedars.", "Use resistant varieties where available.")
             ),
-            4 to Triple(
+            3 to HEALTHY_INFO, // Apple___healthy
+            4 to HEALTHY_INFO, // Blueberry___healthy
+            5 to Triple( // Cherry_(including_sour)___Powdery_mildew
                 listOf("White powdery fungal growth on young leaves.", "Leaf distortion and premature drop."),
                 listOf("Apply sulfur or potassium bicarbonate sprays.", "Remove infected shoots."),
                 listOf("Improve canopy airflow with pruning.", "Avoid excess nitrogen fertilization.")
             ),
-            5 to Triple(
+            6 to HEALTHY_INFO, // Cherry_(including_sour)___healthy
+            7 to Triple( // Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot
                 listOf("Small grey or tan rectangular leaf spots.", "Lesions bordered by leaf veins."),
                 listOf("Apply strobilurin or triazole fungicides.", "Rotate with non-host crops."),
                 listOf("Plant resistant hybrids.", "Avoid planting in fields with previous history.")
             ),
-            6 to Triple(
+            8 to Triple( // Corn_(maize)___Common_rust_
                 listOf("Pustules of orange-red spores on undersides of leaves.", "Yellow-orange discoloration."),
                 listOf("Apply triazole or strobilurin fungicides.", "Scout fields regularly after tasseling."),
                 listOf("Plant resistant hybrids.", "Monitor weather forecasts for high-risk conditions.")
             ),
-            7 to Triple(
+            9 to Triple( // Corn_(maize)___Northern_Leaf_Blight
                 listOf("Large, elliptical lesions with wavy margins.", "Greyish-green to tan lesions on leaves."),
                 listOf("Apply azoxystrobin or propiconazole.", "Plant early to avoid peak infection periods."),
                 listOf("Select resistant hybrids.", "Avoid susceptible hybrids in high-risk areas.")
             ),
-            8 to Triple(
+            10 to HEALTHY_INFO, // Corn_(maize)___healthy
+            11 to Triple( // Grape___Black_rot
                 listOf("Small, angular reddish-brown lesions on leaves.", "Black shrivelled berries."),
                 listOf("Apply copper or myclobutanil fungicides from bud break.", "Remove mummified berries."),
                 listOf("Prune for good canopy airflow.", "Remove all infected material after harvest.")
             ),
-            9 to Triple(
+            12 to Triple( // Grape___Esca_(Black_Measles)
                 listOf("Reddish-brown streaks on canes.", "Interveinal yellowing; leaves wilt and dry."),
                 listOf("No curative treatment; remove and destroy infected vines.", "Apply preventive copper sprays."),
                 listOf("Use certified healthy planting material.", "Avoid planting in soils with Phaeomoniella.")
             ),
-            10 to Triple(
+            13 to Triple( // Grape___Leaf_blight_(Isariopsis_Leaf_Spot)
                 listOf("Brown spots with yellow margins on leaves.", "Lesions coalesce and leaves fall."),
                 listOf("Apply copper-based fungicides.", "Remove infected leaves promptly."),
                 listOf("Prune to improve air circulation.", "Avoid overhead irrigation.")
             ),
-            11 to Triple(
+            14 to HEALTHY_INFO, // Grape___healthy
+            15 to Triple( // Orange___Haunglongbing_(Citrus_greening)
                 listOf("Yellowing of veins and adjacent leaf tissue.", "Fruit is small, lopsided, and poorly colored."),
                 listOf("No cure; remove infected trees.", "Control the psyllid vector with insecticides."),
                 listOf("Use certified disease-free nursery stock.", "Control psyllid populations.")
             ),
-            12 to Triple(
+            16 to Triple( // Peach___Bacterial_spot
                 listOf("Water-soaked spots that turn brown with yellow margins on fruit and leaves.", "Fruit cracks."),
-                listOf("Apply copper-based bactericides.", "Remove infected plant material."),
-                listOf("Use resistant varieties.", "Avoid overhead irrigation.")
+                listOf("Apply oxytetracycline or copper-based bactericides.", "Remove infected twigs."),
+                listOf("Plant resistant peach varieties.", "Avoid excessive nitrogen fertilization.")
             ),
-            13 to Triple(
-                listOf("Circular water-soaked lesions on leaves and fruit.", "Lesions become raised, brown, and cracked."),
-                listOf("Apply copper bactericides at early signs.", "Remove crop debris after harvest."),
-                listOf("Use disease-free transplants.", "Rotate crops for 2-3 years.")
+            17 to HEALTHY_INFO, // Peach___healthy
+            18 to Triple( // Pepper,_bell___Bacterial_spot
+                listOf("Small, yellowish-green to brown spots on leaves.", "Lesions have a slightly raised, scabby appearance."),
+                listOf("Apply copper-based fungicides with mancozeb.", "Remove infected plants immediately."),
+                listOf("Use certified disease-free seeds.", "Rotate crops; do not plant nightshades in the same soil.")
             ),
-            14 to Triple(
-                listOf("Brown circular lesions with concentric rings.", "Target-board pattern on older leaves."),
-                listOf("Apply chlorothalonil or mancozeb.", "Hill soil to protect stems."),
-                listOf("Rotate crops with non-solanaceous plants.", "Use certified seed potatoes.")
+            19 to HEALTHY_INFO, // Pepper,_bell___healthy
+            20 to Triple( // Potato___Early_blight
+                listOf("Dark brown to black lesions with concentric rings on leaves.", "Lower leaves affected first."),
+                listOf("Apply chlorothalonil or mancozeb fungicides.", "Ensure plants have adequate nitrogen."),
+                listOf("Rotate crops out of nightshade family.", "Remove potato vines after harvest.")
             ),
-            15 to Triple(
-                listOf("Water-soaked green-brown lesions, often with white mold at leaf margin.", "Rapid collapse in wet weather."),
-                listOf("Apply metalaxyl or dimethomorph fungicides urgently.", "Destroy infected tubers and plant material."),
-                listOf("Use certified seed potatoes and resistant varieties.", "Ensure good drainage.")
+            21 to Triple( // Potato___Late_blight
+                listOf("Water-soaked, dark green to black lesions on leaves.", "White fungal growth on leaf undersides in high humidity."),
+                listOf("Apply mefenoxam or chlorothalonil immediately.", "Destroy all infected plants and tubers."),
+                listOf("Use certified seed potatoes.", "Avoid overhead irrigation and ensure good drainage.")
             ),
-            16 to Triple(
-                listOf("White powdery fungal patches on leaves.", "Affected tissue turns yellow then brown."),
-                listOf("Apply sulfur or potassium bicarbonate sprays.", "Remove badly infected leaves."),
-                listOf("Avoid dense planting.", "Ensure good air circulation.")
+            22 to HEALTHY_INFO, // Potato___healthy
+            23 to HEALTHY_INFO, // Raspberry___healthy
+            24 to HEALTHY_INFO, // Soybean___healthy
+            25 to Triple( // Squash___Powdery_mildew
+                listOf("White, powdery fungal spots on leaves and stems.", "Leaves may turn yellow and die prematurely."),
+                listOf("Apply sulfur or potassium bicarbonate sprays.", "Remove infected plant debris."),
+                listOf("Plant resistant varieties.", "Provide adequate spacing for air circulation.")
             ),
-            17 to Triple(
-                listOf("Irregular reddish-purple spots on leaves.", "Leaves dry out and curl upward."),
-                listOf("Apply copper fungicides.", "Remove infected leaves."),
-                listOf("Avoid overhead watering.", "Apply mulch to prevent soil splash.")
+            26 to Triple( // Strawberry___Leaf_scorch
+                listOf("Irregular purplish-brown spots on leaves.", "Lesions lack white centers (unlike leaf spot)."),
+                listOf("Apply captan or myclobutanil fungicides.", "Remove infected leaves."),
+                listOf("Maintain good weed control.", "Avoid dense plantings to improve air flow.")
             ),
-            18 to Triple(
-                listOf("Small, raised, water-soaked spots on leaves.", "Spots turn brown with yellow halo."),
-                listOf("Apply copper-based bactericides.", "Remove infected plant material."),
-                listOf("Use disease-free transplants.", "Rotate crops for 2-3 years.")
+            27 to HEALTHY_INFO, // Strawberry___healthy
+            28 to Triple( // Tomato___Bacterial_spot
+                listOf("Small, dark, water-soaked spots on leaves.", "Spots become angular and turn black."),
+                listOf("Apply copper fungicides mixed with mancozeb.", "Avoid working in wet fields."),
+                listOf("Use disease-free seed.", "Practice strict crop rotation.")
             ),
-            19 to Triple(
-                listOf("Dark brown concentric rings on older leaves.", "Lesions with yellow halos."),
-                listOf("Apply chlorothalonil or mancozeb.", "Remove and destroy infected leaves."),
-                listOf("Rotate tomato crops.", "Stake plants to improve airflow.")
+            29 to Triple( // Tomato___Early_blight
+                listOf("Dark lesions with concentric rings on lower leaves.", "Yellowing around the lesions."),
+                listOf("Apply chlorothalonil or copper-based fungicides.", "Remove affected lower leaves."),
+                listOf("Stake or cage plants to keep foliage off the ground.", "Mulch to prevent soil splash.")
             ),
-            20 to Triple(
-                listOf("Water-soaked dark patches, white mold on leaf undersides.", "Rapid spread in wet/cool conditions."),
-                listOf("Apply metalaxyl fungicides immediately.", "Remove all infected material."),
-                listOf("Improve drainage.", "Avoid planting tomatoes near potatoes.")
+            30 to Triple( // Tomato___Late_blight
+                listOf("Large, irregular, water-soaked lesions on leaves and stems.", "Rapid defoliation and fruit rot."),
+                listOf("Apply chlorothalonil or copper fungicides immediately.", "Remove and destroy severely infected plants."),
+                listOf("Ensure good air circulation.", "Avoid overhead watering.")
             ),
-            21 to Triple(
-                listOf("Pale yellowish-green spots on upper leaf surface.", "Olive-grey mold on underside."),
-                listOf("Apply chlorothalonil or copper fungicide.", "Improve greenhouse ventilation."),
-                listOf("Plant resistant varieties.", "Maintain low humidity in greenhouses.")
+            31 to Triple( // Tomato___Leaf_Mold
+                listOf("Pale green or yellow spots on upper leaf surface.", "Olive-green to brown velvety mold on underside."),
+                listOf("Apply chlorothalonil or mancozeb.", "Improve greenhouse ventilation."),
+                listOf("Use resistant varieties.", "Maintain humidity below 85%.")
             ),
-            22 to Triple(
-                listOf("Circular water-soaked spots with dark border.", "Greyish-white centres with black dots."),
-                listOf("Apply chlorothalonil or mancozeb.", "Remove lower infected leaves."),
-                listOf("Mulch to prevent soil splash.", "Stake plants to improve airflow.")
+            32 to Triple( // Tomato___Septoria_leaf_spot
+                listOf("Small, circular spots with dark borders and grey centers.", "Tiny black specks (pycnidia) in the center of spots."),
+                listOf("Apply chlorothalonil or copper fungicides.", "Remove infected lower leaves."),
+                listOf("Rotate crops.", "Water at the base of the plant to keep leaves dry.")
             ),
-            23 to Triple(
-                listOf("Fine webbing on leaf undersides.", "Stippled, yellowing leaves that dry up."),
-                listOf("Apply miticides (abamectin, bifenazate).", "Use strong water sprays on leaf undersides."),
-                listOf("Monitor with sticky traps.", "Avoid plant stress from drought or excess nitrogen.")
+            33 to Triple( // Tomato___Spider_mites Two-spotted_spider_mite
+                listOf("Tiny yellow or white speckles on leaves.", "Fine webbing visible on undersides of leaves."),
+                listOf("Apply horticultural oils or insecticidal soaps.", "Release predatory mites (e.g., Phytoseiulus persimilis)."),
+                listOf("Maintain adequate irrigation; mites thrive on stressed plants.", "Control broadleaf weeds.")
             ),
-            24 to Triple(
-                listOf("Brown circular spots with concentric rings and yellow halo.", "Target-board appearance."),
-                listOf("Apply chlorothalonil or mancozeb.", "Remove and destroy infected leaves."),
-                listOf("Rotate crops.", "Keep foliage dry with drip irrigation.")
+            34 to Triple( // Tomato___Target_Spot
+                listOf("Dark brown lesions with concentric rings, often with a yellow halo.", "Lesions may coalesce and cause leaf blight."),
+                listOf("Apply chlorothalonil or azoxystrobin fungicides.", "Remove infected leaves and debris."),
+                listOf("Improve air circulation.", "Avoid overhead irrigation.")
             ),
-            25 to Triple(
-                listOf("Severe yellowing and upward curling of leaves.", "Stunted plant growth."),
-                listOf("No cure; remove and destroy infected plants.", "Control whitefly vector with insecticides."),
-                listOf("Use reflective mulches to deter whiteflies.", "Plant resistant varieties.")
+            35 to Triple( // Tomato___Tomato_Yellow_Leaf_Curl_Virus
+                listOf("Upward curling and yellowing of leaf margins.", "Stunted plant growth and reduced fruit set."),
+                listOf("No cure; remove and destroy infected plants immediately.", "Control whitefly populations with insecticides or oils."),
+                listOf("Plant resistant varieties.", "Use reflective mulches to repel whiteflies.")
             ),
-            26 to Triple(
-                listOf("Mosaic pattern of light and dark green on leaves.", "Leaf distortion and bronzing."),
-                listOf("Remove and destroy infected plants.", "Disinfect tools between plants."),
-                listOf("Control aphid vectors.", "Wash hands and tools before handling plants.")
-            )
+            36 to Triple( // Tomato___Tomato_mosaic_virus
+                listOf("Mottled light and dark green patterns on leaves.", "Stunted growth and distorted fruit."),
+                listOf("No cure; remove and destroy infected plants.", "Wash hands and tools thoroughly with soap after handling."),
+                listOf("Use certified disease-free seeds.", "Avoid using tobacco products near plants (can transmit TMV).")
+            ),
+            37 to HEALTHY_INFO // Tomato___healthy
         )
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Interpreter initialization (lazy, with GPU → CPU fallback)
-    // ──────────────────────────────────────────────────────────────────────────
 
     private var interpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
+    private var inputHeight = 224
+    private var inputWidth = 224
 
-    @Synchronized
-    private fun getInterpreter(): Interpreter {
+    private suspend fun getInterpreter(): Interpreter = withContext(Dispatchers.IO) {
         if (interpreter == null) {
-            val modelBuffer = FileUtil.loadMappedFile(context, MODEL_ASSET)
+            val modelFile = FileUtil.loadMappedFile(context, MODEL_ASSET)
+            val options = Interpreter.Options()
 
-            // Try GPU delegate first; fall back to CPU if unsupported
-            val options = Interpreter.Options().setNumThreads(4)
             try {
                 gpuDelegate = GpuDelegate()
-                options.addDelegate(gpuDelegate!!)
-                interpreter = Interpreter(modelBuffer, options)
+                options.addDelegate(gpuDelegate)
+                interpreter = Interpreter(modelFile, options)
                 Log.i(TAG, "LiteRT GPU delegate initialised successfully.")
             } catch (e: Exception) {
-                Log.w(TAG, "GPU delegate unavailable, falling back to CPU: ${e.message}")
+                Log.w(TAG, "GPU delegate failed. Falling back to CPU.", e)
                 gpuDelegate?.close()
                 gpuDelegate = null
-                interpreter = Interpreter(modelBuffer, Interpreter.Options().setNumThreads(4))
+                interpreter = Interpreter(modelFile, Interpreter.Options())
+            }
+            
+            // Read input tensor shape dynamically
+            val inputShape = interpreter!!.getInputTensor(0).shape()
+            Log.d(TAG, "Input shape: ${inputShape.contentToString()}")
+            Log.d(TAG, "Input type: ${interpreter!!.getInputTensor(0).dataType()}")
+            
+            val outputShape = interpreter!!.getOutputTensor(0).shape()
+            Log.d(TAG, "Output shape: ${outputShape.contentToString()}")
+            Log.d(TAG, "Output type: ${interpreter!!.getOutputTensor(0).dataType()}")
+            
+            if (inputShape.size == 4) {
+                // Usually [1, H, W, 3] or [1, 3, H, W]
+                // We'll assume NHWC since that's standard for Android TFLite
+                inputHeight = inputShape[1]
+                inputWidth = inputShape[2]
             }
         }
-        return interpreter!!
+        return@withContext interpreter!!
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Public API
-    // ──────────────────────────────────────────────────────────────────────────
+    override suspend fun detectDisease(imageUri: Uri, cropName: String?): LocalDiseaseResult = withContext(Dispatchers.Default) {
+        try {
+            val interp = getInterpreter()
+            val bitmap = loadBitmap(imageUri)
+            
+            // Center crop and resize to exactly match model input dimensions
+            val croppedBitmap = centerCropAndResize(bitmap, inputWidth, inputHeight)
+            val inputBuffer = convertBitmapToByteBuffer(croppedBitmap, inputWidth, inputHeight)
 
-    override suspend fun detectDisease(imageUri: Uri, cropName: String?): LocalDiseaseResult =
-        withContext(Dispatchers.IO) {
-            try {
-                val rawBitmap = loadBitmap(imageUri)
-                val (letterboxed, meta) = letterbox(rawBitmap, INPUT_SIZE)
+            // Output tensor: [1, 38]
+            val output = Array(1) { FloatArray(NUM_CLASSES) }
+            
+            val startTime = System.currentTimeMillis()
+            interp.run(inputBuffer, output)
+            val endTime = System.currentTimeMillis()
+            Log.d(TAG, "Inference completed in ${endTime - startTime} ms")
 
-                val inputBuffer = bitmapToByteBuffer(letterboxed)
-                val outputBuffer = Array(1) { Array(NUM_CLASSES + 4) { FloatArray(8400) } }
+            // Post-process: argmax
+            var bestIndex = 0
+            var bestScore = output[0][0]
 
-                getInterpreter().run(inputBuffer, outputBuffer)
-
-                val detection = postProcess(outputBuffer[0], meta)
-                    ?: return@withContext noDetectionResult()
-
-                val classIndex = detection.classIndex
-                val info = DISEASE_INFO[classIndex]
-
-                LocalDiseaseResult(
-                    diseaseName = CLASS_NAMES.getOrElse(classIndex) { "Unknown" },
-                    confidence = (detection.confidence * 100).toInt(),
-                    symptoms = info?.first ?: listOf("Inspect leaves, stems, and roots for visible damage."),
-                    treatment = info?.second ?: listOf("Consult a local agricultural extension officer."),
-                    prevention = info?.third ?: listOf("Maintain good crop hygiene and monitor regularly."),
-                    additionalNotes = "Detected on-device by YOLO11n · LiteRT FP16 · " +
-                        if (gpuDelegate != null) "GPU accelerated" else "CPU fallback"
-                )
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Inference failed", e)
-                LocalDiseaseResult(
-                    diseaseName = "Analysis Failed",
-                    confidence = 0,
-                    symptoms = emptyList(),
-                    treatment = emptyList(),
-                    prevention = emptyList(),
-                    additionalNotes = "Error: ${e.message}"
-                )
+            for (i in 1 until NUM_CLASSES) {
+                if (output[0][i] > bestScore) {
+                    bestScore = output[0][i]
+                    bestIndex = i
+                }
             }
-        }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Preprocessing
-    // ──────────────────────────────────────────────────────────────────────────
+            if (bestScore < CONFIDENCE_THRESHOLD) {
+                return@withContext noDetectionResult()
+            }
+
+            val info = DISEASE_INFO[bestIndex]
+            val className = CLASS_NAMES.getOrElse(bestIndex) { "Unknown" }
+
+            LocalDiseaseResult(
+                diseaseName = className,
+                confidence = (bestScore * 100).toInt(),
+                symptoms = info?.first ?: listOf("Inspect leaves, stems, and roots for visible damage."),
+                treatment = info?.second ?: listOf("Consult a local agricultural extension officer."),
+                prevention = info?.third ?: listOf("Maintain good crop hygiene and monitor regularly."),
+                additionalNotes = "Classified on-device by YOLO11n-cls · LiteRT FP16 · " +
+                    if (gpuDelegate != null) "GPU accelerated" else "CPU fallback"
+            )
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Inference failed", e)
+            LocalDiseaseResult(
+                diseaseName = "Analysis Failed",
+                confidence = 0,
+                symptoms = emptyList(),
+                treatment = emptyList(),
+                prevention = emptyList(),
+                additionalNotes = "Error: ${e.message}"
+            )
+        }
+    }
 
     /**
-     * Letterbox-resize [src] to a [targetSize]×[targetSize] canvas.
-     * Preserves aspect ratio by padding unused regions with (114, 114, 114) grey,
-     * which matches the padding colour used during YOLO training.
-     *
-     * Returns the letterboxed bitmap and the metadata needed to map
-     * detected boxes back to original image coordinates.
+     * Center crops the image to a square, then resizes it to target size.
+     * This avoids aspect ratio distortion which hurts classification performance.
      */
-    private fun letterbox(src: Bitmap, targetSize: Int): Pair<Bitmap, LetterboxMeta> {
-        val scale = min(
-            targetSize.toFloat() / src.width,
-            targetSize.toFloat() / src.height
-        )
-        val scaledW = (src.width * scale).toInt()
-        val scaledH = (src.height * scale).toInt()
-        val padLeft = (targetSize - scaledW) / 2
-        val padTop = (targetSize - scaledH) / 2
-
-        val canvas = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
-        val c = Canvas(canvas)
-        c.drawColor(Color.rgb(114, 114, 114)) // YOLO training pad colour
-
-        val scaled = Bitmap.createScaledBitmap(src, scaledW, scaledH, true)
-        c.drawBitmap(scaled, padLeft.toFloat(), padTop.toFloat(), Paint())
-        scaled.recycle()
-
-        return canvas to LetterboxMeta(scale, padLeft, padTop, src.width, src.height)
+    private fun centerCropAndResize(src: Bitmap, width: Int, height: Int): Bitmap {
+        val minDim = min(src.width, src.height)
+        val x = (src.width - minDim) / 2
+        val y = (src.height - minDim) / 2
+        
+        val squared = Bitmap.createBitmap(src, x, y, minDim, minDim)
+        if (squared != src) {
+            src.recycle()
+        }
+        
+        val resized = Bitmap.createScaledBitmap(squared, width, height, true)
+        if (resized != squared) {
+            squared.recycle()
+        }
+        
+        return resized
     }
 
     /**
      * Convert bitmap to a Float32 ByteBuffer normalized to [0, 1].
      * Format: NHWC (height × width × channels) as required by TFLite.
      */
-    private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val buf = ByteBuffer.allocateDirect(4 * INPUT_SIZE * INPUT_SIZE * 3)
-        buf.order(ByteOrder.nativeOrder())
+    private fun convertBitmapToByteBuffer(bitmap: Bitmap, width: Int, height: Int): ByteBuffer {
+        // 4 bytes per float * 3 channels (RGB)
+        val byteBuffer = ByteBuffer.allocateDirect(4 * width * height * 3)
+        byteBuffer.order(ByteOrder.nativeOrder())
 
-        val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
-        bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
+        val intValues = IntArray(width * height)
+        bitmap.getPixels(intValues, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
 
-        for (px in pixels) {
-            buf.putFloat(((px shr 16) and 0xFF) / 255f) // R
-            buf.putFloat(((px shr 8) and 0xFF) / 255f)  // G
-            buf.putFloat((px and 0xFF) / 255f)            // B
-        }
-        return buf
-    }
+        for (pixelValue in intValues) {
+            // Extract RGB and normalize to 0.0 - 1.0 (matching YOLO training)
+            val r = ((pixelValue shr 16) and 0xFF) / 255.0f
+            val g = ((pixelValue shr 8) and 0xFF) / 255.0f
+            val b = (pixelValue and 0xFF) / 255.0f
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Post-processing (Decode + NMS)
-    // ──────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Post-process YOLO11 detection output tensor [31, 8400].
-     *
-     * Ultralytics TFLite export decodes DFL boxes and sigmoid-normalizes class
-     * scores internally, so output is already [cx, cy, w, h, c0..c26] in
-     * *normalized* coordinates (0-1 relative to input size).
-     *
-     * Steps:
-     *  1. For each of 8400 anchors, find max class score
-     *  2. Filter by [CONFIDENCE_THRESHOLD]
-     *  3. Decode normalized cx/cy/w/h → x1/y1/x2/y2 in original-image pixels
-     *  4. Non-Maximum Suppression
-     *  5. Return the highest-confidence surviving detection
-     */
-    private fun postProcess(
-        output: Array<FloatArray>, // shape [31][8400]
-        meta: LetterboxMeta
-    ): Detection? {
-        val candidates = mutableListOf<Detection>()
-
-        for (anchor in 0 until 8400) {
-            val cx = output[0][anchor]
-            val cy = output[1][anchor]
-            val w  = output[2][anchor]
-            val h  = output[3][anchor]
-
-            // Find best class score for this anchor
-            var bestClass = 0
-            var bestScore = 0f
-            for (c in 0 until NUM_CLASSES) {
-                val score = output[4 + c][anchor]
-                if (score > bestScore) {
-                    bestScore = score
-                    bestClass = c
-                }
-            }
-
-            if (bestScore < CONFIDENCE_THRESHOLD) continue
-
-            // Decode normalized xywh → pixel x1y1x2y2 in original image space
-            val x1 = ((cx - w / 2f) * INPUT_SIZE - meta.padLeft) / meta.scale
-            val y1 = ((cy - h / 2f) * INPUT_SIZE - meta.padTop) / meta.scale
-            val x2 = ((cx + w / 2f) * INPUT_SIZE - meta.padLeft) / meta.scale
-            val y2 = ((cy + h / 2f) * INPUT_SIZE - meta.padTop) / meta.scale
-
-            val clampedX1 = x1.coerceIn(0f, meta.origW.toFloat())
-            val clampedY1 = y1.coerceIn(0f, meta.origH.toFloat())
-            val clampedX2 = x2.coerceIn(0f, meta.origW.toFloat())
-            val clampedY2 = y2.coerceIn(0f, meta.origH.toFloat())
-
-            if (clampedX2 <= clampedX1 || clampedY2 <= clampedY1) continue
-
-            candidates.add(
-                Detection(bestClass, bestScore, clampedX1, clampedY1, clampedX2, clampedY2)
-            )
+            byteBuffer.putFloat(r)
+            byteBuffer.putFloat(g)
+            byteBuffer.putFloat(b)
         }
 
-        if (candidates.isEmpty()) return null
-
-        // ── Sanity check: detect untrained / garbage model output ─────────
-        // A well-trained YOLO model produces a handful of confident detections.
-        // An untrained model (e.g. 1-epoch checkpoint) floods ALL anchors with
-        // high scores for every class. If too many anchors pass threshold,
-        // the output is noise and should be rejected.
-        val garbageLimit = (8400 * GARBAGE_ANCHOR_RATIO).toInt()
-        if (candidates.size > garbageLimit) {
-            Log.w(TAG, "Garbage output detected: ${candidates.size}/8400 anchors above threshold " +
-                "(limit: $garbageLimit). Model likely needs retraining.")
-            return null
-        }
-
-        return nms(candidates).maxByOrNull { it.confidence }
-    }
-
-    /**
-     * Non-Maximum Suppression — removes overlapping boxes above [IOU_THRESHOLD].
-     * Processes all classes together (class-agnostic NMS, suitable for single-detection use).
-     */
-    private fun nms(detections: List<Detection>): List<Detection> {
-        val sorted = detections.sortedByDescending { it.confidence }.toMutableList()
-        val result = mutableListOf<Detection>()
-
-        while (sorted.isNotEmpty()) {
-            val best = sorted.removeAt(0)
-            result.add(best)
-            sorted.removeAll { iou(best, it) >= IOU_THRESHOLD }
-        }
-        return result
-    }
-
-    private fun iou(a: Detection, b: Detection): Float {
-        val interX1 = max(a.x1, b.x1)
-        val interY1 = max(a.y1, b.y1)
-        val interX2 = min(a.x2, b.x2)
-        val interY2 = min(a.y2, b.y2)
-
-        val interArea = max(0f, interX2 - interX1) * max(0f, interY2 - interY1)
-        if (interArea == 0f) return 0f
-
-        val aArea = (a.x2 - a.x1) * (a.y2 - a.y1)
-        val bArea = (b.x2 - b.x1) * (b.y2 - b.y1)
-        return interArea / (aArea + bArea - interArea)
+        return byteBuffer
     }
 
     private fun noDetectionResult() = LocalDiseaseResult(
-        diseaseName = "Unable to Analyze",
+        diseaseName = "Unable to Classify",
         confidence = 0,
-        symptoms = listOf("The disease detection model could not produce a reliable result."),
-        treatment = listOf("The model may need additional training for accurate detection."),
-        prevention = listOf("Try retaking the photo in good lighting, close to the affected leaf."),
-        additionalNotes = "The YOLO11n model requires full training to produce accurate results. " +
-            "Please retrain the model with the complete PlantVillage dataset."
+        symptoms = listOf("The model could not classify the image with sufficient confidence."),
+        treatment = listOf("Ensure the image is well-lit and clearly shows the affected plant leaf."),
+        prevention = listOf("Try retaking the photo closer to the subject."),
+        additionalNotes = "Prediction confidence was below the minimum threshold ($CONFIDENCE_THRESHOLD)."
     )
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Bitmap loading
-    // ──────────────────────────────────────────────────────────────────────────
 
     private fun loadBitmap(uri: Uri): Bitmap =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -493,25 +408,4 @@ class YoloDiseaseInference @Inject constructor(
             @Suppress("DEPRECATION")
             MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
         }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Data classes
-    // ──────────────────────────────────────────────────────────────────────────
-
-    private data class LetterboxMeta(
-        val scale: Float,
-        val padLeft: Int,
-        val padTop: Int,
-        val origW: Int,
-        val origH: Int
-    )
-
-    private data class Detection(
-        val classIndex: Int,
-        val confidence: Float,
-        val x1: Float,
-        val y1: Float,
-        val x2: Float,
-        val y2: Float
-    )
 }
