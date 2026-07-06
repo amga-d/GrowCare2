@@ -4,6 +4,7 @@ import android.net.Uri
 import com.example.growCare.data.local.database.entity.ChatMessageEntity
 import com.example.growCare.data.local.datasource.ChatLocalDataSource
 import com.example.growCare.data.local.inference.LocalChatInference
+import com.example.growCare.data.local.inference.LocalDiseaseInference
 import com.example.growCare.domain.model.ChatMessage
 import com.example.growCare.domain.repository.ChatRepository
 import com.example.growCare.domain.repository.Conversation
@@ -16,11 +17,12 @@ import javax.inject.Singleton
 
 /**
  * Implementation of ChatRepository
- * Handles AI chat interactions with streaming responses and persistence
+ * Handles AI chat interactions with streaming responses, persistence, and vision context
  */
 @Singleton
 class ChatRepositoryImpl @Inject constructor(
     private val localChatInference: LocalChatInference,
+    private val localDiseaseInference: LocalDiseaseInference,
     private val chatLocalDataSource: ChatLocalDataSource
 ) : ChatRepository {
 
@@ -41,11 +43,26 @@ class ChatRepositoryImpl @Inject constructor(
             saveMessage(conversationId, userMessage)
             emit(userMessage)
             
-            // Step 2: Stream local on-device response
+            // Fetch chat history for context
+            val history = chatLocalDataSource.getConversationMessages(conversationId)
+                .first() // Get current snapshot
+                .map { entity ->
+                    ChatMessage(
+                        id = entity.id,
+                        content = entity.content,
+                        isUser = entity.isUser,
+                        timestamp = entity.timestamp,
+                        conversationId = entity.conversationId,
+                        imageUrl = entity.imageUrl,
+                        isStreaming = false
+                    )
+                }
+
+            // Step 2: Stream local on-device response with context
             val aiMessageId = UUID.randomUUID().toString()
             var finalResponse = ""
             
-            localChatInference.streamChatReply(message).collect { fullResponseSoFar ->
+            localChatInference.streamChatReply(message, history).collect { fullResponseSoFar ->
                 finalResponse = fullResponseSoFar
                 
                 // Emit streaming message
@@ -99,11 +116,57 @@ class ChatRepositoryImpl @Inject constructor(
             saveMessage(conversationId, userMessage)
             emit(userMessage)
             
-            val response = localChatInference.replyWithImage(message, imageUri)
+            // 1. Run YOLO inference on the image
+            val detectionResult = localDiseaseInference.detectDisease(imageUri, null)
+            
+            // 2. Format a prompt that injects the YOLO result so Gemma can "see" the image
+            val enrichedPrompt = buildString {
+                append("I have uploaded an image of my crop. ")
+                if (detectionResult.diseaseName.contains("Healthy", ignoreCase = true)) {
+                    append("Our vision system analyzed it and thinks it looks healthy. ")
+                } else if (detectionResult.diseaseName == "Unknown" || detectionResult.diseaseName == "Unable to Classify") {
+                    append("Our vision system was unable to confidently identify any specific plant or disease in this image. ")
+                } else {
+                    append("Our vision system detected: ${detectionResult.diseaseName} with ${detectionResult.confidence}% confidence. ")
+                }
+                append("Based on this, my question is: $message")
+            }
 
+            // 3. Fetch chat history for context
+            val history = chatLocalDataSource.getConversationMessages(conversationId)
+                .first()
+                .map { entity ->
+                    ChatMessage(
+                        id = entity.id,
+                        content = entity.content,
+                        isUser = entity.isUser,
+                        timestamp = entity.timestamp,
+                        conversationId = entity.conversationId,
+                        imageUrl = entity.imageUrl,
+                        isStreaming = false
+                    )
+                }
+
+            // 4. Stream response from Gemma using the enriched prompt
+            val aiMessageId = UUID.randomUUID().toString()
+            var finalResponse = ""
+            
+            localChatInference.streamChatReply(enrichedPrompt, history).collect { fullResponseSoFar ->
+                finalResponse = fullResponseSoFar
+                
+                emit(ChatMessage(
+                    id = aiMessageId,
+                    content = finalResponse,
+                    isUser = false,
+                    timestamp = System.currentTimeMillis(),
+                    isStreaming = true
+                ))
+            }
+
+            // 5. Final AI message save
             val aiMessage = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                content = response,
+                id = aiMessageId,
+                content = finalResponse,
                 isUser = false,
                 timestamp = System.currentTimeMillis(),
                 isStreaming = false
@@ -150,7 +213,7 @@ class ChatRepositoryImpl @Inject constructor(
             chatLocalDataSource.getAllConversations().collect { latestMessages ->
                 val conversations = latestMessages.map { entity ->
                     val title = if (entity.conversationId.startsWith("chat_")) {
-                        "Chat"
+                        if (entity.content.length > 30) entity.content.take(30) + "..." else entity.content
                     } else {
                         entity.conversationId
                     }

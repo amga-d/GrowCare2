@@ -171,7 +171,7 @@ class GemmaChatInference @Inject constructor(
      * Uses [StopGenerationException] to forcefully break out of Flow.collect(),
      * since `return@collect` does NOT stop the upstream flow.
      */
-    override fun streamChatReply(prompt: String): Flow<String> = flow {
+    override fun streamChatReply(prompt: String, history: List<com.example.growCare.domain.model.ChatMessage>): Flow<String> = flow {
         try {
             val llm = getEngine()
             val conversation = llm.createConversation()
@@ -179,9 +179,25 @@ class GemmaChatInference @Inject constructor(
             val accumulated = StringBuilder()
             var tokenCount = 0
 
+            val fullPrompt = buildString {
+                append(SYSTEM_PROMPT)
+                append("\n\n")
+                if (history.isNotEmpty()) {
+                    append("Previous Conversation:\n")
+                    // Only take the last 5 messages to avoid blowing up the context window
+                    history.takeLast(5).forEach { msg ->
+                        val role = if (msg.isUser) "Farmer" else "GrowCare"
+                        append("$role: ${msg.content}\n")
+                    }
+                    append("\n")
+                }
+                append("Farmer: $prompt\n")
+                append("GrowCare: ")
+            }
+
             try {
                 conversation.sendMessageAsync(
-                    "$SYSTEM_PROMPT\n\nFarmer question: $prompt"
+                    fullPrompt
                 ).collect { token ->
                     tokenCount++
                     accumulated.append(token)
@@ -221,58 +237,7 @@ class GemmaChatInference @Inject constructor(
         }
     }
 
-    /**
-     * Responds to a message with an optional image context.
-     *
-     * Note: Gemma 4 E2B supports multimodal inputs in its full form, but the
-     * LiteRT-LM text-only API does not currently expose image tensor inputs in
-     * the stable Kotlin API.
-     *
-     * For now, the model responds based on the text prompt alone.
-     */
-    override suspend fun replyWithImage(prompt: String, imageUri: Uri): String =
-        withContext(Dispatchers.IO) {
-            try {
-                val llm = getEngine()
-                val conversation = llm.createConversation()
 
-                val fullPrompt = buildString {
-                    append(SYSTEM_PROMPT)
-                    append("\n\n")
-                    append("The farmer has shared an image of their crop and asks: $prompt\n")
-                    append("Please provide general advice based on the text question.")
-                }
-
-                val result = StringBuilder()
-                var tokenCount = 0
-
-                try {
-                    conversation.sendMessageAsync(fullPrompt).collect { token ->
-                        tokenCount++
-                        result.append(token)
-
-                        if (tokenCount > MAX_TOKENS) {
-                            throw StopGenerationException("max tokens")
-                        }
-                        if (result.length > MAX_RESPONSE_CHARS) {
-                            throw StopGenerationException("max chars")
-                        }
-                        if (tokenCount % 5 == 0 && isRepeating(result.toString())) {
-                            throw StopGenerationException("repetition")
-                        }
-                    }
-                } catch (e: StopGenerationException) {
-                    Log.i(TAG, "Generation stopped (image): ${e.reason}")
-                }
-
-                trimRepetition(result.toString()).trimEnd()
-
-            } catch (e: IllegalStateException) {
-                "⚠️ ${e.message}"
-            } catch (e: Exception) {
-                "⚠️ Could not analyze the image context: ${e.message}"
-            }
-        }
 
     override suspend fun generateDiseaseAdvice(diseaseName: String): String =
         withContext(Dispatchers.IO) {
