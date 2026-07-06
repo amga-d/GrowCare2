@@ -1,0 +1,1 @@
+./gradlew :app:installDebug 2>&1 | grep -E "BUILD|FAILURE|error:|^e:" 

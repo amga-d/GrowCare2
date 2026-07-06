@@ -1,0 +1,35 @@
+{
+    "image": "test.jpg",
+    "prediction": {
+        "class_id": 33,
+        "class_name": "Tomato___Spider_mites Two-spotted_spider_mite",
+        "confidence": 0.7088149189949036
+    },
+    "top5": [
+        {
+            "class_id": 33,
+            "class_name": "Tomato___Spider_mites Two-spotted_spider_mite",
+            "confidence": 0.7088149189949036
+        },
+        {
+            "class_id": 35,
+            "class_name": "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+            "confidence": 0.29102084040641785
+        },
+        {
+            "class_id": 29,
+            "class_name": "Tomato___Early_blight",
+            "confidence": 0.00010897684842348099
+        },
+        {
+            "class_id": 30,
+            "class_name": "Tomato___Late_blight",
+            "confidence": 3.975090294261463e-05
+        },
+        {
+            "class_id": 31,
+            "class_name": "Tomato___Leaf_Mold",
+            "confidence": 6.624025900237029e-06
+        }
+    ]
+}
