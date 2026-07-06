@@ -40,7 +40,8 @@ class YoloDiseaseInference @Inject constructor(
         private const val TAG = "YoloDiseaseInference"
         private const val MODEL_ASSET = "disease_detection.tflite"
         private const val NUM_CLASSES = 38
-        private const val CONFIDENCE_THRESHOLD = 0.25f // Reject predictions below this
+        private const val CONFIDENCE_THRESHOLD = 0.60f // Reject anything below 60 % — very confident required
+        private const val HEALTHY_THRESHOLD = 0.50f    // Healthy label needs at least 50 %
 
         /**
          * Exact class names matching the classification model's output.
