@@ -67,7 +67,7 @@ Follow these instructions to run the application locally on an Android device.
 ### Prerequisites
 1. **Android Studio** (Koala or later recommended)
 2. **Physical Android Device** (Emulators are not recommended due to heavy LLM requirements)
-3. **Gemma 4 E2B Model** (Download the `.litertlm` file from HuggingFace `litert-community/gemma-4-E2B-it-litert-lm`)
+3. **Gemma 4 E2B Model** (Download the `.litertlm` file from HuggingFace `litert-community/gemma-4-E2B-it-litert-lm`) or [github](https://github.com/LTERTPub/LiteRT-LM/blob/main/examples/gemma4_e2b_it.litertlm)
 
 ### 1. Build the App
 1. Clone the repository: `git clone <repo-url>`
@@ -81,8 +81,8 @@ Because the Gemma LLM is too large (1-2GB) to bundle inside an APK, you must man
 1. Connect your Android device to your PC with USB Debugging enabled.
 2. Open a terminal and run the following ADB command to push the model:
    ```bash
-   adb shell run-as com.example.growCare mkdir -p files/models
    adb push <path_to_downloaded_model>/gemma4_e2b.litertlm /data/local/tmp/
+   adb shell run-as com.example.growCare mkdir -p files/models
    adb shell run-as com.example.growCare cp /data/local/tmp/gemma4_e2b.litertlm files/models/
    adb shell rm /data/local/tmp/gemma4_e2b.litertlm
    ```
