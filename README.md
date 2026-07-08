@@ -88,10 +88,20 @@ Because the Gemma LLM is too large (1-2GB) to bundle inside an APK, you must man
    ```
 3. Launch the app. The AI Chat and Disease Detection features will now work completely offline!
 
+
+### 3. Convert and Add YOLO Model (Optional)
+If you want to train and add your own YOLO classification model instead of using the default one:
+
+1. Train a YOLO11-cls model using the `ultralytics` package.
+2. Place your trained `best.pt` file in the `ML` directory.
+3. Convert the trained model to TFLite FP16 format by running the provided export script:
+   ```bash
+   python ML/export_tflite_fp16.py
+7. Rebuild and install the app to test your new model!
+
 ## 👥 Team
 
-**Team Name:** Chan Sow Lin Gang  
-**Team Leader:** Ravfael Novfito Handoyo  
+**Team Leader:** Amgad Al-Ameri (@amga9d)
 
 ## 📄 License
 This project is part of an AI innovation challenge. Please contact the team for licensing information.
@@ -103,5 +113,5 @@ We welcome contributions! Please feel free to submit issues and pull requests.
 - Powered by **Google LiteRT** and **Gemma**.
 - Built for farmers worldwide who feed our planet.
 ---
-**Made with ❤️ by Team Chan Sow Lin Gang**
+**Made with ❤️**
 _Transforming smartphones into super eyes for sustainable agriculture._
