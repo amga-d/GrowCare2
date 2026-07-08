@@ -7,6 +7,6 @@ import kotlinx.coroutines.flow.Flow
  * Local on-device interface for agricultural assistant responses.
  */
 interface LocalChatInference {
-    fun streamChatReply(prompt: String): Flow<String>
-    suspend fun replyWithImage(prompt: String, imageUri: Uri): String
+    fun streamChatReply(prompt: String, history: List<com.example.growCare.domain.model.ChatMessage> = emptyList()): Flow<String>
+    suspend fun generateDiseaseAdvice(diseaseName: String): String
 }

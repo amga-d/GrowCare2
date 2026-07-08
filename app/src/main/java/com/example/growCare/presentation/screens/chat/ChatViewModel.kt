@@ -61,15 +61,21 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private var chatHistoryJob: kotlinx.coroutines.Job? = null
+
     /**
-     * Load chat history from repository
+     * Load chat history from repository and observe for updates
      */
     private fun loadChatHistory() {
-        viewModelScope.launch {
+        chatHistoryJob?.cancel()
+        chatHistoryJob = viewModelScope.launch {
             getChatHistoryUseCase(_uiState.value.conversationId).collect { messages ->
                 _uiState.update { it.copy(
                     messages = messages,
-                    isLoading = false
+                    isLoading = false,
+                    conversationTitle = if (messages.isNotEmpty()) 
+                        messages.first().content.take(30) + "..." 
+                    else "New Conversation"
                 )}
             }
         }
@@ -209,6 +215,7 @@ class ChatViewModel @Inject constructor(
      * Start a new chat conversation
      */
     private fun startNewChat() {
+        chatHistoryJob?.cancel()
         val newConversationId = "chat_${System.currentTimeMillis()}"
         _uiState.update { it.copy(
             messages = emptyList(),
@@ -216,28 +223,18 @@ class ChatViewModel @Inject constructor(
             conversationTitle = "New Conversation",
             error = null
         )}
+        loadChatHistory()
     }
     
     /**
      * Load existing conversation
      */
     private fun loadConversation(conversationId: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(
-                isLoading = true,
-                conversationId = conversationId
-            )}
-            
-            getChatHistoryUseCase(conversationId).collect { messages ->
-                _uiState.update { it.copy(
-                    messages = messages,
-                    isLoading = false,
-                    conversationTitle = if (messages.isNotEmpty()) 
-                        messages.first().content.take(30) + "..." 
-                    else "New Conversation"
-                )}
-            }
-        }
+        _uiState.update { it.copy(
+            isLoading = true,
+            conversationId = conversationId
+        )}
+        loadChatHistory()
     }
 
     private fun loadAllConversations() {

@@ -2,6 +2,7 @@ package com.example.growCare.data.local.inference
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,26 +33,48 @@ class GemmaChatInference @Inject constructor(
 ) : LocalChatInference {
 
     companion object {
+        private const val TAG = "GemmaChatInference"
         const val MODEL_FILE_NAME = "gemma4_e2b.litertlm"
         const val MODEL_DIR = "models"
 
+        // ── Generation limits ────────────────────────────────────────────────
+        // Small on-device LLMs (E2B = ~2B params) often fail to emit EOS and
+        // fall into repetition loops. These guards prevent the device from
+        // hanging and memory from exploding.
+
+        /** Maximum number of tokens to generate per response. */
+        private const val MAX_TOKENS = 768
+
+        /** Hard character cutoff — stops generation even mid-token. */
+        private const val MAX_RESPONSE_CHARS = 6000
+
+        /** Window size (in chars) used for repetition detection. */
+        private const val REPETITION_WINDOW = 40
+
+        /** If the same window repeats this many times consecutively, stop. */
+        private const val REPETITION_LIMIT = 3
+
         /**
-         * Agricultural system prompt injected at the start of every conversation.
-         * This keeps the model focused on farming topics and avoids off-topic replies.
+         * Agricultural system prompt — kept concise to leave context window
+         * room for the actual conversation on a small E2B model.
          */
-        private const val SYSTEM_PROMPT = """You are GrowCare AI, a helpful and knowledgeable agricultural assistant designed for smallholder farmers. Your role is to provide clear, practical, and actionable advice on the following topics only:
-
-- Plant disease identification and treatment
-- Crop health and farming best practices
-- Pest and weed control
-- Soil health, fertilization, and irrigation
-- Harvest timing and post-harvest handling
-- Seasonal and weather-related farming decisions
-
-If a user asks a question unrelated to agriculture, politely explain that you are specialized for farming topics and invite them to ask an agricultural question instead.
-
-Keep your answers concise, easy to understand, and practical for a farmer without advanced technical knowledge."""
+        private const val SYSTEM_PROMPT =
+            "You are GrowCare AI, a highly intelligent agricultural assistant for farmers. " +
+            "Answer only farming questions (diseases, pests, soil, crops, harvest). " +
+            "If asked about non-farming topics, politely decline. " +
+            "Provide helpful and clear answers, but keep them reasonably concise to save time."
     }
+
+    /**
+     * Custom exception thrown to forcefully break out of Flow.collect().
+     *
+     * In Kotlin, `return@collect` only skips the current lambda invocation —
+     * it does NOT stop the upstream flow from emitting more tokens.
+     * The only way to abort a flow collection is to throw from inside collect().
+     * We use a custom exception (not CancellationException) so it doesn't
+     * cancel the outer coroutine scope.
+     */
+    private class StopGenerationException(val reason: String) : Exception(reason)
 
     // LiteRT-LM Engine — initialized lazily on first use
     private var engine: Engine? = null
@@ -85,79 +108,186 @@ Keep your answers concise, easy to understand, and practical for a farmer withou
         engine!!
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Repetition detection
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Checks if the tail of [text] contains the same [REPETITION_WINDOW]-char
+     * block repeated [REPETITION_LIMIT] times consecutively.
+     */
+    private fun isRepeating(text: String): Boolean {
+        val minLen = REPETITION_WINDOW * REPETITION_LIMIT
+        if (text.length < minLen) return false
+
+        val tail = text.takeLast(minLen)
+        val window = tail.takeLast(REPETITION_WINDOW)
+
+        var count = 0
+        var offset = tail.length - REPETITION_WINDOW
+        while (offset >= 0) {
+            val chunk = tail.substring(offset, offset + REPETITION_WINDOW)
+            if (chunk == window) count++ else break
+            offset -= REPETITION_WINDOW
+        }
+        return count >= REPETITION_LIMIT
+    }
+
+    /**
+     * Trims trailing repeated blocks from the response.
+     */
+    private fun trimRepetition(text: String): String {
+        if (!isRepeating(text)) return text
+        // Find where repetition starts by walking backwards
+        val window = text.takeLast(REPETITION_WINDOW)
+        var cutPoint = text.length - REPETITION_WINDOW
+        while (cutPoint >= REPETITION_WINDOW) {
+            val prev = text.substring(cutPoint - REPETITION_WINDOW, cutPoint)
+            if (prev == window) {
+                cutPoint -= REPETITION_WINDOW
+            } else {
+                break
+            }
+        }
+        // Keep one instance of the repeated block
+        return text.substring(0, cutPoint + REPETITION_WINDOW).trimEnd()
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Streaming chat
+    // ──────────────────────────────────────────────────────────────────────────
+
     /**
      * Streams an agricultural AI response token by token.
      *
      * Each emission to the Flow is the full response string accumulated so far,
      * so the UI can update progressively without managing state itself.
      *
-     * A new [Conversation] is created per call, prepended with the agricultural
-     * system prompt to keep the model on-topic.
+     * Guardrails:
+     *  - Stops after [MAX_TOKENS] tokens
+     *  - Stops after [MAX_RESPONSE_CHARS] characters
+     *  - Stops if repetition is detected
+     *
+     * Uses [StopGenerationException] to forcefully break out of Flow.collect(),
+     * since `return@collect` does NOT stop the upstream flow.
      */
-    override fun streamChatReply(prompt: String): Flow<String> = flow {
+    override fun streamChatReply(prompt: String, history: List<com.example.growCare.domain.model.ChatMessage>): Flow<String> = flow {
         try {
             val llm = getEngine()
-
-            // Each chat turn gets a fresh conversation context with the system prompt
             val conversation = llm.createConversation()
 
-            // Inject the system prompt as the first user/model exchange
-            // to establish the agricultural context before the real user message
-            conversation.addQueryChunk(SYSTEM_PROMPT)
-            conversation.addQueryChunk("\n\nFarmer question: $prompt")
+            val accumulated = StringBuilder()
+            var tokenCount = 0
 
-            val accumulatedResponse = StringBuilder()
+            val fullPrompt = buildString {
+                append(SYSTEM_PROMPT)
+                append("\n\n")
+                if (history.isNotEmpty()) {
+                    append("Previous Conversation:\n")
+                    // A balanced context window (5 full turns) to maintain memory without slowing down the model too much
+                    history.takeLast(10).forEach { msg ->
+                        val role = if (msg.isUser) "Farmer" else "GrowCare"
+                        append("$role: ${msg.content}\n")
+                    }
+                    append("\n")
+                }
+                append("Farmer: $prompt\n")
+                append("GrowCare: ")
+            }
 
-            // sendMessageAsync() performs real token-level streaming from the on-device model
-            conversation.generateResponseAsync().collect { token ->
-                accumulatedResponse.append(token)
-                emit(accumulatedResponse.toString())
+            try {
+                conversation.sendMessageAsync(
+                    fullPrompt
+                ).collect { token ->
+                    tokenCount++
+                    accumulated.append(token)
+
+                    // Guard 1: max token limit
+                    if (tokenCount > MAX_TOKENS) {
+                        throw StopGenerationException("max tokens ($MAX_TOKENS)")
+                    }
+
+                    // Guard 2: max character limit
+                    if (accumulated.length > MAX_RESPONSE_CHARS) {
+                        throw StopGenerationException("max chars ($MAX_RESPONSE_CHARS)")
+                    }
+
+                    // Guard 3: repetition detection (check every 5 tokens)
+                    if (tokenCount % 5 == 0 && isRepeating(accumulated.toString())) {
+                        throw StopGenerationException("repetition at token $tokenCount")
+                    }
+
+                    emit(accumulated.toString())
+                }
+            } catch (e: StopGenerationException) {
+                // Expected — generation was intentionally stopped by a guard
+                Log.i(TAG, "Generation stopped: ${e.reason}")
+            }
+
+            // Final emit with cleaned-up text (trim any trailing repetition)
+            val finalText = trimRepetition(accumulated.toString()).trimEnd()
+            if (finalText.isNotEmpty()) {
+                emit(finalText)
             }
 
         } catch (e: IllegalStateException) {
-            // Model file missing — surface a clear user-facing message
             emit("⚠️ ${e.message}")
         } catch (e: Exception) {
             emit("⚠️ Could not generate a response: ${e.message}")
         }
     }
 
-    /**
-     * Responds to a message with an optional image context.
-     *
-     * Note: Gemma 4 E2B supports multimodal inputs in its full form, but the
-     * LiteRT-LM text-only API does not currently expose image tensor inputs in
-     * the stable Kotlin API. The image URI is logged here for future use when
-     * the multimodal conversation API stabilizes.
-     *
-     * For now, the model responds based on the text prompt alone.
-     */
-    override suspend fun replyWithImage(prompt: String, imageUri: Uri): String =
+
+
+    override suspend fun generateDiseaseAdvice(diseaseName: String): String =
         withContext(Dispatchers.IO) {
             try {
                 val llm = getEngine()
                 val conversation = llm.createConversation()
 
                 val fullPrompt = buildString {
-                    append(SYSTEM_PROMPT)
-                    append("\n\n")
-                    append("The farmer has shared an image of their crop and asks: $prompt\n")
-                    append("(Image analysis is being processed on-device via the disease detection model. ")
-                    append("Please provide general advice based on the text question.)")
+                    append("You are an expert agricultural AI. ")
+                    append("The farmer's crop has been diagnosed with: $diseaseName. ")
+                    append("Provide exactly 2 Symptoms, 2 Treatments, and 2 Preventions. ")
+                    append("Format your response strictly with the following exact headers:\n")
+                    append("Symptoms:\n")
+                    append("- [symptom 1]\n")
+                    append("- [symptom 2]\n\n")
+                    append("Treatment:\n")
+                    append("- [treatment 1]\n")
+                    append("- [treatment 2]\n\n")
+                    append("Prevention:\n")
+                    append("- [prevention 1]\n")
+                    append("- [prevention 2]\n")
                 }
-
-                conversation.addQueryChunk(fullPrompt)
 
                 val result = StringBuilder()
-                conversation.generateResponseAsync().collect { token ->
-                    result.append(token)
-                }
-                result.toString()
+                var tokenCount = 0
 
-            } catch (e: IllegalStateException) {
-                "⚠️ ${e.message}"
+                try {
+                    conversation.sendMessageAsync(fullPrompt).collect { token ->
+                        tokenCount++
+                        result.append(token)
+
+                        if (tokenCount > MAX_TOKENS) {
+                            throw StopGenerationException("max tokens")
+                        }
+                        if (result.length > MAX_RESPONSE_CHARS) {
+                            throw StopGenerationException("max chars")
+                        }
+                        if (tokenCount % 5 == 0 && isRepeating(result.toString())) {
+                            throw StopGenerationException("repetition")
+                        }
+                    }
+                } catch (e: StopGenerationException) {
+                    Log.i(TAG, "Generation stopped (advice): ${e.reason}")
+                }
+
+                trimRepetition(result.toString()).trimEnd()
+
             } catch (e: Exception) {
-                "⚠️ Could not analyze the image context: ${e.message}"
+                Log.e(TAG, "Failed to generate advice", e)
+                ""
             }
         }
 }

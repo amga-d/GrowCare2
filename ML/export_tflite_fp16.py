@@ -1,8 +1,8 @@
 """
 export_tflite_fp16.py
 =====================
-Exports the trained YOLO11n disease detection model to TFLite FP16 format
-for Android deployment via the GrowCare app.
+Exports the trained YOLO11n-cls disease classification model to TFLite FP16
+format for Android deployment via the GrowCare app.
 
 Conversion pipeline:
     best.pt  ──[Ultralytics]──►  best.onnx  ──[TF/ONNX]──►  disease_detection.tflite
@@ -18,10 +18,15 @@ Output:
     app/src/main/assets/disease_detection.tflite   (auto-copied)
 
 Model info:
-    Architecture : YOLO11n (detection, 101 layers)
-    Classes      : 27 (curated PlantVillage — index 0 = Healthy)
-    Input        : [1, 3, 640, 640]  BCHW  (normalized 0-1)
-    Output       : [1, 31, 8400]     31 = 4 box coords + 27 class scores
+    Architecture : YOLO11n-cls (classification)
+    Classes      : 38 (full PlantVillage)
+    Input        : [1, 224, 224, 3]  NHWC  (normalized 0-1)
+    Output       : [1, 38]           class probabilities
+
+IMPORTANT: imgsz=224 is intentional. YOLO classification models run at
+    224x224 internally. Setting imgsz=640 creates a [1, 640, 640, 3] TFLite
+    tensor but the model still internally sub-samples to 224x224, producing
+    garbage predictions on Android due to the mismatched input layout.
 """
 
 import argparse
@@ -48,7 +53,7 @@ def export_onnx(model: YOLO) -> Path:
     print("\n── Step 1: PT → ONNX ───────────────────────────────────────────────")
     onnx_path = model.export(
         format="onnx",
-        imgsz=640,
+        imgsz=224,       # YOLO-cls internal inference resolution
         half=True,       # FP16 weights
         simplify=True,   # onnxslim graph optimisation pass
         device="cpu",
@@ -68,7 +73,7 @@ def export_tflite(model: YOLO) -> Path:
     print("\n── Step 2: ONNX → TFLite FP16 ─────────────────────────────────────")
     tflite_path = model.export(
         format="tflite",
-        imgsz=640,
+        imgsz=224,      # YOLO-cls internal inference resolution — NOT 640!
         half=True,      # FP16 quantization (~5 MB vs ~10 MB FP32)
         int8=False,     # INT8 needs calibration data; FP16 needs none
         device="cpu",

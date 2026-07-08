@@ -39,7 +39,7 @@ fun NavGraph(
                     navController.navigate(Screen.DISEASE_SCAN)
                 },
                 onNavigateToChat = {
-                    navController.navigate(Screen.CHAT)
+                    navController.navigate("chat")
                 },
                 onNavigateToProfile = {
                     navController.navigate(Screen.PROFILE)

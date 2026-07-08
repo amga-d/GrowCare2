@@ -1,168 +1,117 @@
-# 🌾L - AI-Powered Smart Agriculture Assistant
+# 🌾 GrowCare 2 - Fully Offline AI Agriculture Assistant
 
-> Making invisible agricultural threats visible and preventable.
+> Making invisible agricultural threats visible and preventable, completely offline.
 
 ## 📋 Overview
 
-**GrowCare** is a revolutionary smart assistant for farmers that transforms
-smartphone cameras into powerful agricultural diagnostic tools. Designed to help
-500M farmers who lose half of their harvest to invisible threats, Live my Leaf
-leverages advanced AI technology powered by Google Gemini to detect, predict,
-and prevent crop problems before they become disasters.
+**GrowCare 2** is a revolutionary smart assistant for farmers that transforms smartphone cameras into powerful agricultural diagnostic tools. Rebuilt from the ground up to operate completely offline, GrowCare 2 leverages on-device AI models (YOLO and Gemma via LiteRT) to detect, predict, and prevent crop problems without requiring an internet connection.
 
-### Our Solution
-
-Live my Leaf is a "smart assistant" that can:
-
-- 👁 **See what human eyes cannot detect** - Early disease and pest
-  identification
-- 🔮 **Predict future problems** - Based on data patterns and environmental
-  conditions
-- 💡 **Provide precise solutions** - Tailored recommendations for every
-  agricultural challenge
-- 📱 **Work on any smartphone** - No expensive hardware or sensors required
+Designed for farmers in rural areas with poor connectivity, GrowCare 2 guarantees zero latency, enhanced privacy, and constant accessibility.
 
 ## ✨ Key Features
 
-### 1. 🦠 Disease Detection
+### 1. 🦠 Real-time Disease Detection (YOLO11n-cls)
+Snap a photo to instantly identify plant diseases across 38 crop categories. The on-device vision model processes images in milliseconds directly on your phone's processor.
 
-Snap a photo to instantly identify plant diseases and receive treatment
-recommendations.
+### 2. 💬 Multimodal AI Chat Assistant (Gemma 4 E2B)
+A built-in conversational agent powered by Google's Gemma 4 E2B via LiteRT-LM. Ask farming questions or upload photos of your crops—our hybrid AI pipeline allows the text-only Gemma model to "see" images via YOLO and provide tailored, step-by-step agronomic advice.
 
-### 2. 🌱 Seed Quality Assessment
+### 3. 💾 Fully Offline Architecture
+Zero reliance on cloud APIs or Firebase. Chat history and disease scans are stored locally using Room (SQLite), ensuring you never lose access to your data or the AI assistant when off the grid.
 
-Scan seeds to check viability and predict germination success before planting.
+## 🏗️ Technology & AI Stack
 
-### 3. 🧪 Fertilizer Recipe Generator
+GrowCare 2 utilizes a decoupled, on-device hybrid multimodal pipeline. 
 
-Get custom fertilizer formulas optimized for your crops and soil conditions.
+### Frontend & Local Data
+- **Kotlin & Jetpack Compose** - Modern, reactive UI.
+- **Room (SQLite)** - Local persistence for chat histories and diagnostic logs.
+- **Native Camera APIs & EXIF Processing** - Correctly processes camera orientations for reliable vision inference.
 
-### 4. 💬 AI Chat Assistant
+### The AI Engine (LiteRT / TFLite)
+For deep architectural details, see the [AI System Architecture Document](AI_SYSTEM_ARCHITECTURE.md).
 
-Ask farming questions anytime and receive personalized guidance in real-time,
-powered by Gemini AI.
-
-## 🚀 What Makes Live my Leaf Different?
-
-### vs. Traditional Solutions
-
-| Solution Type         | Limitations                     | Live my Leaf Advantage        |
-| --------------------- | ------------------------------- | ----------------------------- |
-| 📚 Digital Manuals    | Static PDFs, no real-time help  | Dynamic AI-powered guidance   |
-| 🏷 IoT Solutions      | $1000+ sensors, WiFi required   | Works on existing smartphones |
-| 🧑‍🌾 Expert Consultants | Rare, expensive, not accessible | 24/7 AI expert in your pocket |
-
-### Our Unique Selling Points
-
-1. **🤖 Invisible Intelligence**
-   - Gemini AI working behind a simple camera interface
-   - Complex algorithms delivering simple, actionable results
-   - Expert knowledge in farmer-friendly format
-
-2. **🌾 Farm-to-Phone Revolution**
-   - No technical training needed
-   - No subscription fees for basic features
-   - Works offline for core features
-
-3. **🎯 One-Stop AI Hub**
-   - Disease detection + Seed assessment + Pest forecast + Fertilizer recipes
-   - Holistic integrated solution in one app
-   - Self-evolving intelligence that gets smarter with every use
-
-> **"The AI Agronomist in Disguise"** - While others sell expensive gadgets or
-> complicated software, Live my Leaf delivers NASA-level agricultural
-> intelligence through farmers' existing smartphones.
-
-## 🏗️ Technology Stack
-
-### Frontend
-
-- **Kotlin** - Cross-platform mobile development
-- **Native Camera APIs** - Image capture and processing
-
-### Backend
-
-- **Node.js** - Server-side logic
-- **REST APIs** - Communication layer
-
-### AI
-
-- **Google Gemini AI** - Core AI engine for analysis and chat
-
-### Database & Storage
-
-- **SQL/NoSQL Database (Firebase)** - User data and historical records
+- **Vision: YOLO11n-cls (Ultralytics)**
+  - A lightweight convolutional neural network optimized for image classification.
+  - Replaces traditional object detection to remove heavy post-processing (NMS), offering 3x faster inference and higher accuracy on the PlantVillage dataset.
+- **Language: Gemma 4 E2B (Google LiteRT-LM)**
+  - A highly compressed, 2-billion parameter Large Language Model running locally.
+  - Dynamically parses YOLO results to generate Markdown-formatted treatments, symptoms, and preventions.
+  - Remembers up to 10 conversational turns (20 messages) for deep, context-aware agricultural support.
 
 ## 📱 How It Works
 
 ```
-1. Spot Issue → 2. Snap Photo → 3. Get Diagnosis → 4. Apply Solution → 5. Track Results
+1. Snap Photo → 2. YOLO Identifies Disease → 3. Gemma Generates Advice → 4. Save Locally
 ```
 
-### Simple Process Flow:
+### Multimodal Chat Workflow:
+1. **Capture** - Take a photo of a sick leaf in the Chat screen.
+2. **Vision Analysis** - The YOLO model instantly classifies the disease.
+3. **Context Injection** - The classification result is seamlessly injected into the Gemma LLM's prompt.
+4. **AI Response** - Gemma streams a comprehensive, context-aware answer as if it saw the photo itself.
 
-1. **Capture** - Take a photo of your crop, seed, or field
-2. **Analyze** - AI processes the image using advanced computer vision
-3. **Diagnose** - Get instant identification of issues or quality assessment
-4. **Recommend** - Receive precise, actionable treatment recommendations
-5. **Track** - Monitor progress and get follow-up guidance
+## 🚀 Why GrowCare 2?
 
-## 🎯 Real Impact
+### vs. Traditional Cloud Solutions
+| Solution Type | Limitations | GrowCare 2 Advantage |
+| ------------- | ----------- | -------------------- |
+| ☁️ Cloud AI Apps | Require strong 4G/5G, high API costs | **100% Offline**, zero latency, free to run |
+| 📚 Digital Manuals | Static PDFs, hard to search | **Dynamic AI** that answers specific questions |
+| 🧑‍🌾 Expert Consultants | Rare and expensive | **24/7 AI expert** in your pocket |
 
-- ⚡ **Prevents major crop losses** - Early detection saves harvests
-- 💰 **Reduces farming costs** - Targeted solutions minimize waste
-- ⏰ **Saves critical response time** - Instant diagnosis enables quick action
-- 📈 **Boosts harvest yields** - Optimal care throughout crop lifecycle
-- 🌱 **Promotes sustainable farming** - Precise fertilizer use reduces
-  environmental impact
+## 🛠️ Getting Started (Setup & Run)
 
-## 📊 Architecture
+Follow these instructions to run the application locally on an Android device.
 
-The application follows a modern, scalable architecture:
+### Prerequisites
+1. **Android Studio** (Koala or later recommended)
+2. **Physical Android Device** (Emulators are not recommended due to heavy LLM requirements)
+3. **Gemma 4 E2B Model** (Download the `.litertlm` file from HuggingFace `litert-community/gemma-4-E2B-it-litert-lm`) or [github](https://github.com/LTERTPub/LiteRT-LM/blob/main/examples/gemma4_e2b_it.litertlm)
 
-- **Mobile Frontend** - User interface and camera integration
-- **API Gateway** - Request routing and authentication
-- **AI Processing Service** - Gemini integration
-- **Database Layer** - User data and agricultural knowledge base
-- **Storage Service** - Image and file management
+### 1. Build the App
+1. Clone the repository: `git clone <repo-url>`
+2. Open the project in Android Studio.
+3. Sync Gradle and build the project.
+4. Install the app on your physical device via USB debugging.
+
+### 2. Push the LLM Model via ADB
+Because the Gemma LLM is too large (1-2GB) to bundle inside an APK, you must manually push it to the app's internal storage before chatting with the AI.
+
+1. Connect your Android device to your PC with USB Debugging enabled.
+2. Open a terminal and run the following ADB command to push the model:
+   ```bash
+   adb push <path_to_downloaded_model>/gemma4_e2b.litertlm /data/local/tmp/
+   adb shell run-as com.example.growCare mkdir -p files/models
+   adb shell run-as com.example.growCare cp /data/local/tmp/gemma4_e2b.litertlm files/models/
+   adb shell rm /data/local/tmp/gemma4_e2b.litertlm
+   ```
+3. Launch the app. The AI Chat and Disease Detection features will now work completely offline!
+
+
+### 3. Convert and Add YOLO Model (Optional)
+If you want to train and add your own YOLO classification model instead of using the default one:
+
+1. Train a YOLO11-cls model using the `ultralytics` package.
+2. Place your trained `best.pt` file in the `ML` directory.
+3. Convert the trained model to TFLite FP16 format by running the provided export script:
+   ```bash
+   python ML/export_tflite_fp16.py
+7. Rebuild and install the app to test your new model!
 
 ## 👥 Team
 
-**Team Name:** Chan Sow Lin Gang
-
-**Team Leader:** Ravfael Novfito Handoyo
-
-## 🔮 Future Development
-
-- Multi-language support for global reach
-- Offline mode with local AI processing
-- Community features for farmer collaboration
+**Team Leader:** Amgad Al-Ameri (@amga9d)
 
 ## 📄 License
-
-This project is part of an AI innovation challenge. Please contact the team for
-licensing information.
+This project is part of an AI innovation challenge. Please contact the team for licensing information.
 
 ## 🤝 Contributing
-
 We welcome contributions! Please feel free to submit issues and pull requests.
 
-## 📞 Contact & Support
-
-For questions, feedback, or support:
-
-- 📧 Email: [Your contact email]
-- 🐛 Issues: [GitHub Issues]
-- 💬 Discussions: [GitHub Discussions]
-
 ## 🙏 Acknowledgments
-
-- Powered by **Google Gemini AI**
-- Built for farmers worldwide who feed our planet
-- Inspired by the need to make precision agriculture accessible to all
-
+- Powered by **Google LiteRT** and **Gemma**.
+- Built for farmers worldwide who feed our planet.
 ---
-
-**Made with ❤️ by Team Live my Leaf**
-
+**Made with ❤️**
 _Transforming smartphones into super eyes for sustainable agriculture._
